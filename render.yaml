@@ -7,7 +7,10 @@ services:
     dockerfilePath: Dockerfile
     dockerContext: .
     plan: free
-    healthCheckPath: /api/health
+    # No healthCheckPath: Render's HTTP health check was timing out (5s) during brief slow
+    # moments and restarting the instance in a loop (wiping data). Without it, Render marks the
+    # service healthy once it binds the port and stops the restart-loop. The 5-min Apps Script
+    # auto-sync keeps it warm so it never idle-spins-down.
     envVars:
       - key: ADMIN_EMAILS
         value: amey.patil1@meesho.com
