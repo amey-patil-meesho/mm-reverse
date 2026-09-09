@@ -1,0 +1,21 @@
+# Render Blueprint for MM Reverse (standalone repo).
+# Single Docker image: Node serves the built React SPA + /api. The Dockerfile is at the repo root.
+services:
+  - type: web
+    name: mm-reverse
+    runtime: docker
+    dockerfilePath: Dockerfile
+    dockerContext: .
+    plan: free
+    healthCheckPath: /api/health
+    envVars:
+      - key: ADMIN_EMAILS
+        value: amey.patil1@meesho.com
+      # Start empty (no baked-in sample); admin uploads the workbook to load riders.
+      - key: SEED_CSV
+        value: /app/backend/seed/none.csv
+      # Secrets — set in the Render dashboard, not committed:
+      - key: ADMIN_ACCESS_CODE   # admin login code (you chose AMEY)
+        sync: false
+      - key: BRIDGE_TOKEN        # must match the Apps Script gateway TOKEN (only if you use the bridge)
+        sync: false

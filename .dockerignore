@@ -1,0 +1,8 @@
+**/node_modules
+backend/data
+**/.env
+# Real operational export has customer_ids — never bake it into the image.
+backend/seed/pp_pc_source.csv
+dist
+*.log
+.git

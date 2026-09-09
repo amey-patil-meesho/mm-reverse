@@ -1,0 +1,16 @@
+wh_date,PP Code,PP Cluster,MM rider,crate id,sku_id,sku_name,EAN,created_at_source_timestamp,rto_qty,Empty/Non Empty status
+2026-09-04,PP101,Bangalore-South,Ravi Kumar,CR1001,SK001,Cotton T-Shirt,8901234500017,2026-09-04 07:12:00,3,Non Empty
+2026-09-04,PP101,Bangalore-South,Ravi Kumar,CR1001,SK002,Denim Jeans,8901234500024,2026-09-04 07:12:00,2,Non Empty
+2026-09-04,PP101,Bangalore-South,Ravi Kumar,CR1001,SK003,Running Shoes,8901234500031,2026-09-04 07:12:00,1,Non Empty
+2026-09-04,PP101,Bangalore-South,Ravi Kumar,CR1002,,,,2026-09-04 07:15:00,0,Empty
+2026-09-04,PP102,Bangalore-South,Ravi Kumar,CR1003,SK004,Steel Bottle,8901234500048,2026-09-04 07:40:00,12,Non Empty
+2026-09-04,PP102,Bangalore-South,Ravi Kumar,CR1003,SK005,Yoga Mat,8901234500055,2026-09-04 07:40:00,10,Non Empty
+2026-09-04,PP102,Bangalore-South,Ravi Kumar,CR1008,SK006,Wall Clock,8901234500062,2026-09-04 07:40:00,8,Non Empty
+2026-09-04,PP103,Bangalore-North,Anita Sharma,CR1004,SK007,Kids Puzzle,8901234500079,2026-09-04 08:05:00,4,Non Empty
+2026-09-04,PP103,Bangalore-North,Anita Sharma,CR1004,SK008,Story Book,8901234500086,2026-09-04 08:05:00,5,Non Empty
+2026-09-04,PP103,Bangalore-North,Anita Sharma,CR1005,,,,2026-09-04 08:07:00,0,Empty
+2026-09-04,PP104,Bangalore-North,Anita Sharma,CR1006,SK009,LED Bulb,8901234500093,2026-09-04 08:30:00,6,Non Empty
+2026-09-04,PP104,Bangalore-North,Anita Sharma,CR1006,SK010,Extension Cord,8901234500109,2026-09-04 08:30:00,2,Non Empty
+2026-09-04,PP104,Bangalore-North,Anita Sharma,CR1007,,,,2026-09-04 08:32:00,0,Empty
+2026-09-04,PP101,Bangalore-South,Ravi Kumar,CR1011,,,,2026-08-29 07:20:00,0,Empty
+2026-09-04,PP103,Bangalore-North,Anita Sharma,CR1012,,,,2026-08-27 08:10:00,0,Empty

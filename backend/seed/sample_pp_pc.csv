@@ -1,0 +1,11 @@
+wh_processing_date,sku_id,customer_id,shipment_status,crate_number,metadata_source_hub_sub_type,source_hub,destination_hub,flow_direction,created_at_source_timestamp,ready_for_pickup_timestamp,dispatched_from_source_timestamp,received_at_destination_timestamp,sorting_started_timestamp,sorting_completed_timestamp,po_quantity,quantity_fulfilled_post_FM_processing,quantity_fulfilled_post_picking_shortfall,quantity_to_be_picked,quantity_picked,quantity_missing,quantity_damaged,packaging_not_good_quantity,wrong_item_quantity,rto_qty
+2026-09-08,11111,,CREATED_AT_SOURCE,CR-A1,PICKUP_POINT,PP-500001-01,NGPPC01,REVERSE,2026-09-08T07:00:00+05:30,,,,,,3,3,3,3,,,,,,3
+2026-09-08,22222,,CREATED_AT_SOURCE,CR-A1,PICKUP_POINT,PP-500001-01,NGPPC01,REVERSE,2026-09-08T07:00:00+05:30,,,,,,2,2,2,2,,,,,,2
+2026-09-08,33333,,CREATED_AT_SOURCE,CR-A1,PICKUP_POINT,PP-500001-01,NGPPC01,REVERSE,2026-09-08T07:00:00+05:30,,,,,,1,1,1,1,,,,,,1
+2026-09-08,,,CREATED_AT_SOURCE,CR-A2,PICKUP_POINT,PP-500001-01,NGPPC01,REVERSE,2026-09-08T07:05:00+05:30,,,,,,1,1,1,1,,,,,,0
+2026-09-08,44444,,CREATED_AT_SOURCE,CR-B1,PICKUP_POINT,PP-500002-07,NGPPC01,REVERSE,2026-09-08T08:00:00+05:30,,,,,,20,20,20,20,,,,,,20
+2026-09-08,55555,,CREATED_AT_SOURCE,CR-B2,PICKUP_POINT,PP-500002-07,NGPPC01,REVERSE,2026-09-08T08:00:00+05:30,,,,,,12,12,12,12,,,,,,12
+2026-09-08,66666,,CREATED_AT_SOURCE,CR-C1,PICKUP_POINT,PP-500003-03,NGPPC02,REVERSE,2026-09-08T08:30:00+05:30,,,,,,4,4,4,4,,,,,,4
+2026-09-08,77777,,CREATED_AT_SOURCE,CR-C1,PICKUP_POINT,PP-500003-03,NGPPC02,REVERSE,2026-09-08T08:30:00+05:30,,,,,,5,5,5,5,,,,,,5
+2026-09-08,,,CREATED_AT_SOURCE,CR-C2,PICKUP_POINT,PP-500003-03,NGPPC02,REVERSE,2026-09-08T08:32:00+05:30,,,,,,1,1,1,1,,,,,,0
+2026-09-01,,,CREATED_AT_SOURCE,CR-D1,PICKUP_POINT,PP-500001-01,NGPPC01,REVERSE,2026-09-01T07:00:00+05:30,,,,,,1,1,1,1,,,,,,0

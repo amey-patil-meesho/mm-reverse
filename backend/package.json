@@ -1,0 +1,18 @@
+{
+  "name": "mm-reverse-backend",
+  "version": "1.0.0",
+  "description": "MM Reverse - RTO reverse-processing backend (Node + Express + SQLite)",
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node --env-file-if-exists=.env src/server.js",
+    "dev": "node --env-file-if-exists=.env --watch src/server.js",
+    "pull": "node --env-file-if-exists=.env src/pull.js",
+    "reset": "node src/reset.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "xlsx": "^0.18.5"
+  }
+}

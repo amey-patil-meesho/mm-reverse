@@ -1,0 +1,14 @@
+node_modules/
+dist/
+backend/public/
+*.log
+
+# Secrets / env
+.env
+**/.env
+
+# SQLite working DB
+backend/data/
+
+# Real operational export — contains customer_ids; do not commit. Ships as a local file only.
+backend/seed/pp_pc_source.csv
