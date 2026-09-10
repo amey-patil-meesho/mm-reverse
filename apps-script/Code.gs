@@ -117,15 +117,21 @@ function callApi(path, options) {
   options.headers = { 'x-bridge-token': TOKEN };
   options.muteHttpExceptions = true;
   var last = '';
-  for (var i = 0; i < 7; i++) {
-    var r = UrlFetchApp.fetch(APP_URL + path, options);
-    var code = r.getResponseCode(), txt = r.getContentText();
-    if (code >= 200 && code < 300) { try { return JSON.parse(txt); } catch (e) { throw new Error('bad JSON from app: ' + txt.slice(0, 200)); } }
-    last = code + ': ' + txt.slice(0, 150);
-    if (code === 502 || code === 503 || code === 429 || code === 500) { Utilities.sleep(10000); continue; } // waking / transient → wait & retry
-    throw new Error('app ' + last);
+  for (var i = 0; i < 8; i++) {
+    try {
+      var r = UrlFetchApp.fetch(APP_URL + path, options);
+      var code = r.getResponseCode(), txt = r.getContentText();
+      if (code >= 200 && code < 300) { try { return JSON.parse(txt); } catch (e) { throw new Error('bad JSON from app: ' + txt.slice(0, 200)); } }
+      last = code + ': ' + txt.slice(0, 150);
+      if (code === 502 || code === 503 || code === 429 || code === 500) { Utilities.sleep(10000); continue; } // waking → wait & retry
+      throw new Error('app ' + last);
+    } catch (e) {
+      var msg = String((e && e.message) || e);
+      if (msg.indexOf('app ') === 0 || msg.indexOf('bad JSON') === 0) throw e;   // genuine app error → don't loop
+      last = msg; Utilities.sleep(10000);                                          // network hiccup ("Address unavailable") → retry
+    }
   }
-  throw new Error('app not responding after retries (' + last + ')');
+  throw new Error('app unreachable after retries (' + last + ')');
 }
 function post(path, body) { return callApi(path, { method: 'post', contentType: 'application/json', payload: JSON.stringify(body) }); }
 function fetchJson(path) { return callApi(path, { method: 'get' }); }
@@ -170,11 +176,16 @@ function buildPpShopMap(master) {
     if (sh.getName() === ADMIN_TAB || sh.getName() === SKU_TAB) return;
     var v; try { v = sh.getDataRange().getValues(); } catch (_) { return; }
     if (!v.length) return;
-    var h = cols(v[0]);
-    var cPP = pick(h, ['pp code', 'pp_code', 'source_hub', 'pp']);
-    var cShop = pick(h, ['shop name', 'shop_name', 'shop', 'store name']);
-    if (cPP < 0 || cShop < 0) return;
-    for (var i = 1; i < v.length; i++) { var pp = String(v[i][cPP] || '').trim(); if (pp && !map[pp]) map[pp] = String(v[i][cShop] || '').trim(); }
+    // Header may not be row 0 — route tabs have merged title rows above it. Scan the first rows.
+    var hi = -1, cPP = -1, cShop = -1;
+    for (var r = 0; r < Math.min(v.length, 12); r++) {
+      var h = cols(v[r]);
+      var p = pick(h, ['pp code', 'pp_code', 'source_hub', 'pp']);
+      var s = pick(h, ['shop name', 'shop_name', 'shop', 'store name']);
+      if (p >= 0 && s >= 0) { hi = r; cPP = p; cShop = s; break; }
+    }
+    if (hi < 0) return;
+    for (var i = hi + 1; i < v.length; i++) { var pp = String(v[i][cPP] || '').trim(); if (pp && !map[pp]) map[pp] = String(v[i][cShop] || '').trim(); }
   });
   return map;
 }
