@@ -6,14 +6,18 @@ services:
     runtime: docker
     dockerfilePath: Dockerfile
     dockerContext: .
-    plan: free
-    # No healthCheckPath: Render's HTTP health check was timing out (5s) during brief slow
-    # moments and restarting the instance in a loop (wiping data). Without it, Render marks the
-    # service healthy once it binds the port and stops the restart-loop. The 5-min Apps Script
-    # auto-sync keeps it warm so it never idle-spins-down.
+    plan: starter          # always-on instance ($7/mo): no spin-down, no cold starts.
+    # No healthCheckPath: Render's HTTP health check was timing out (5s) during brief slow moments
+    # and restarting the instance. Without it, Render marks the service healthy once it binds the port.
+    disk:                  # persistent storage so the SQLite data survives restarts/deploys
+      name: mm-reverse-data
+      mountPath: /var/data
+      sizeGB: 1
     envVars:
       - key: ADMIN_EMAILS
         value: amey.patil1@meesho.com
+      - key: DB_PATH        # keep the SQLite DB on the persistent disk
+        value: /var/data/mm_reverse.db
       # Start empty (no baked-in sample); admin uploads the workbook to load riders.
       - key: SEED_CSV
         value: /app/backend/seed/none.csv
