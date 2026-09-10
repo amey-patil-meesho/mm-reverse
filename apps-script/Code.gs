@@ -85,18 +85,31 @@ function syncIn() {
   var groups = {};
   rows.forEach(function (r) { (groups[r.rider_phone] = groups[r.rider_phone] || []).push(r); });
   var date = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  var ci = {}; cols.forEach(function (c, i) { ci[c] = i; });
+  var kc = ci['crate_number'], ks = ci['sku_id'];   // upsert key = crate × sku
   var written = 0;
   Object.keys(groups).forEach(function (phone) {
     var rd = byPhone[phone]; if (!rd || !rd.sheetId) return;
     var rss; try { rss = SpreadsheetApp.openById(rd.sheetId); } catch (_) { return; }
     var name = SCAN_TAB_PREFIX + date;
     var tab = rss.getSheetByName(name);
+    // ACCUMULATE (never clear): read existing rows, then upsert each scan by crate×sku. This way
+    // a free-tier spin-down that wipes the app can never erase scans already written to the sheet.
+    var existing = [];
     if (!tab) { tab = rss.insertSheet(name); tab.appendRow(cols); tab.setFrozenRows(1); }
-    else { tab.clearContents(); tab.appendRow(cols); }   // rewrite with the latest snapshot
-    var data = groups[phone].map(function (r) { return cols.map(function (c) { return r[c] != null ? r[c] : ''; }); });
-    if (data.length) { tab.getRange(2, 1, data.length, cols.length).setValues(data); written += data.length; }
+    else { var vv = tab.getDataRange().getValues(); if (vv.length > 1) existing = vv.slice(1); }
+    var map = {};
+    existing.forEach(function (r, idx) { map[String(r[kc]) + '|' + String(r[ks])] = idx; });
+    groups[phone].forEach(function (r) {
+      var arr = cols.map(function (c) { return r[c] != null ? r[c] : ''; });
+      var key = String(r.crate_number) + '|' + String(r.sku_id);
+      if (map[key] != null) existing[map[key]] = arr;                 // update in place
+      else { existing.push(arr); map[key] = existing.length - 1; }    // append new
+      written++;
+    });
+    if (existing.length) tab.getRange(2, 1, existing.length, cols.length).setValues(existing);
   });
-  toast('Sync in: wrote ' + written + ' scan rows into Scan Data ' + date);
+  toast('Sync in: merged ' + written + ' scan rows into Scan Data ' + date);
   return { written: written };
 }
 
