@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { initDb, DEFAULT_CRATE_CAPACITY, ingest } from './db.js';
+import { initDb, DEFAULT_CRATE_CAPACITY, ingest, rebuild } from './db.js';
 import * as L from './logic.js';
 import { parseWorkbook } from './parse.js';
 import { pullAndLoad, metabaseConfigured, defaultWindow } from './metabase.js';
@@ -144,6 +144,9 @@ api.post('/admin/upload', requireAdmin, wrap((req) => {
   const res = ingest({ skus: parsed.skus, rows: parsed.rows });
   return { ok: true, ...res, ...parsed.stats };
 }));
+// ---- admin: reset — wipe ALL data (scans + pending) for a clean slate; re-sync reloads fresh ----
+api.post('/admin/reset', requireAdmin, wrap(() => { rebuild([]); return { ok: true, message: 'All data cleared. Run Sync out (or wait for auto-sync) to reload fresh pending crates.' }; }));
+
 // ---- admin: rider list + per-rider scan-data download ----
 api.get('/admin/riders', requireAdmin, wrap(() => ({ riders: L.adminRiders() })));
 api.get('/admin/scan-data.csv', requireAdmin, (req, res) => {

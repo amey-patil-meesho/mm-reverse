@@ -56,6 +56,19 @@ export default function AdminFlow() {
     finally { setBusy(false); }
   };
 
+  const reset = async () => {
+    if (!confirm('Clear ALL data (test scans + pending crates)? Riders and crates reload on the next Sync out / auto-sync. Use this to wipe test data before a fresh rollout.')) return;
+    try {
+      setBusy(true); setMsg(null);
+      const r = await authed('/api/admin/reset', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+      setMsg({ kind: 'ok', text: d.message || 'All data cleared.' });
+      refreshCounts(); loadRiders();
+    } catch (e) { setMsg({ kind: 'err', text: 'Reset failed: ' + e.message }); }
+    finally { setBusy(false); }
+  };
+
   if (!auth) return (
     <>
       <TopBar title="Admin" sub="Data access — Meesho admins only" />
@@ -125,6 +138,14 @@ export default function AdminFlow() {
               ))}
             </div>
           ) : <div className="small muted">No riders loaded yet. Upload a workbook above.</div>}
+        </div>
+
+        <div className="card">
+          <div className="small muted" style={{ marginBottom: 8 }}>Reset (clear test data)</div>
+          <button className="btn ghost" disabled={busy} onClick={reset} style={{ color: '#b3261e', borderColor: '#f0c0bb' }}>
+            ⟲ Clear all data
+          </button>
+          <div className="small muted" style={{ marginTop: 8 }}>Wipes scans + pending crates. Fresh data reloads on the next Sync out (or the 5-min auto-sync).</div>
         </div>
       </div>
     </>
