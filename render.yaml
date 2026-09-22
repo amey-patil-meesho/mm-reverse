@@ -6,9 +6,10 @@ services:
     runtime: docker
     dockerfilePath: Dockerfile
     dockerContext: .
-    plan: free             # free tier (spins down when idle; storage is ephemeral).
-    # To go always-on later ($7/mo): change to `plan: starter` and add a `disk:` (name/mountPath
-    # /var/data/sizeGB 1) plus DB_PATH=/var/data/mm_reverse.db — then the data also persists.
+    plan: starter          # always-on instance ($7/mo): no spin-down, no cold starts.
+    # Storage is still ephemeral on this plan (data resets on a restart/redeploy) — the Google Sheet
+    # is the durable record. To also persist the app's DB, add a `disk:` (name / mountPath /var/data
+    # / sizeGB 1, ~$0.25/mo) plus DB_PATH=/var/data/mm_reverse.db.
     # No healthCheckPath: Render's HTTP health check was timing out (5s) during brief slow moments
     # and restarting the instance. Without it, Render marks the service healthy once it binds the port.
     envVars:
