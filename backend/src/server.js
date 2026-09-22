@@ -133,7 +133,7 @@ api.post('/admin/refresh', requireAdmin, async (req, res) => {
 // ---- data bridge (Apps Script pushes the day's pending crates in, pulls scan results out) ----
 // Only inbound calls to Apps Script are blocked by the Meesho domain policy; outbound from Apps
 // Script is free, so the sheet PUSHES to us here (token-gated) rather than us pulling from it.
-api.post('/ingest', requireBridge, wrap((req) => ingest({ skus: req.body.skus, rows: req.body.rows })));
+api.post('/ingest', requireBridge, wrap((req) => ingest({ skus: req.body.skus, rows: req.body.rows, reset: req.body.reset })));
 api.get('/scan-export', requireBridge, wrap(() => ({ cols: L.EXPORT_COLS, rows: L.scanExportRows() })));
 
 // ---- admin: fallback data path — upload a workbook (xlsx/csv) of the rider sheets ----
