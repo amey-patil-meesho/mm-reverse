@@ -7,14 +7,17 @@ services:
     dockerfilePath: Dockerfile
     dockerContext: .
     plan: starter          # always-on instance ($7/mo): no spin-down, no cold starts.
-    # Storage is still ephemeral on this plan (data resets on a restart/redeploy) — the Google Sheet
-    # is the durable record. To also persist the app's DB, add a `disk:` (name / mountPath /var/data
-    # / sizeGB 1, ~$0.25/mo) plus DB_PATH=/var/data/mm_reverse.db.
     # No healthCheckPath: Render's HTTP health check was timing out (5s) during brief slow moments
     # and restarting the instance. Without it, Render marks the service healthy once it binds the port.
+    disk:                  # 1 GB persistent disk (~$0.25/mo) so the SQLite data survives restarts/deploys
+      name: mm-reverse-data
+      mountPath: /var/data
+      sizeGB: 1
     envVars:
       - key: ADMIN_EMAILS
         value: amey.patil1@meesho.com
+      - key: DB_PATH        # keep the SQLite DB on the persistent disk
+        value: /var/data/mm_reverse.db
       # Start empty (no baked-in sample); admin uploads the workbook to load riders.
       - key: SEED_CSV
         value: /app/backend/seed/none.csv
