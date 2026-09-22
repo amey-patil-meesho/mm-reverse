@@ -259,20 +259,28 @@ export function ingest(payload = {}) {
   // shift. Skip the whole rebuild when the payload is identical to the last one — this stops the
   // periodic event-loop freeze that made the app go blank for riders. (In-progress scans are
   // untouched either way; ingest only ever rebuilds the PENDING set.)
-  const _hash = crypto.createHash('sha1').update(JSON.stringify([payload.skus || [], payload.rows || []])).digest('hex');
-  if (_hash === _lastIngestHash) return { added: 0, rows: payload.rows?.length || 0, crates: 0, unchanged: true };
+  const reset = !!payload.reset;   // fresh-day load: wipe everything first (morning run)
+  const _hash = crypto.createHash('sha1').update(JSON.stringify([payload.skus || [], payload.rows || [], reset])).digest('hex');
+  if (!reset && _hash === _lastIngestHash) return { added: 0, rows: payload.rows?.length || 0, crates: 0, unchanged: true };
   upsertSkus(payload.skus || []);
   const crates = cratesFromRows(payload.rows || []);
   let added = 0;
   tx(() => {
-    const pend = db.prepare(`SELECT pp_id FROM pickup_points WHERE stage='PENDING'`).all().map((r) => r.pp_id);
-    for (const id of pend) {
-      db.prepare('DELETE FROM pp_rto_demand WHERE pp_id=?').run(id);
-      db.prepare('DELETE FROM crate_contents WHERE pp_id=?').run(id);
-      db.prepare('DELETE FROM scan_events WHERE pp_id=?').run(id);
-      db.prepare('DELETE FROM crates WHERE pp_id=?').run(id);
+    if (reset) {
+      // Fresh day: clear EVERYTHING (incl. completed/scanned) so today's crates load clean and a
+      // shop finished yesterday reappears with today's crates. Scans were saved to the sheet the
+      // evening before, so nothing is lost.
+      for (const t of ['pp_rto_demand', 'crate_contents', 'scan_events', 'crates', 'endstate_received_at_pc', 'pickup_points']) db.exec(`DELETE FROM ${t};`);
+    } else {
+      const pend = db.prepare(`SELECT pp_id FROM pickup_points WHERE stage='PENDING'`).all().map((r) => r.pp_id);
+      for (const id of pend) {
+        db.prepare('DELETE FROM pp_rto_demand WHERE pp_id=?').run(id);
+        db.prepare('DELETE FROM crate_contents WHERE pp_id=?').run(id);
+        db.prepare('DELETE FROM scan_events WHERE pp_id=?').run(id);
+        db.prepare('DELETE FROM crates WHERE pp_id=?').run(id);
+      }
+      if (pend.length) db.prepare(`DELETE FROM pickup_points WHERE stage='PENDING'`).run();
     }
-    if (pend.length) db.prepare(`DELETE FROM pickup_points WHERE stage='PENDING'`).run();
     for (const c of crates) {
       if (db.prepare('SELECT 1 FROM crates WHERE crate_id=?').get(c.crate_id)) continue; // owned by in-progress PP
       insertCrate(c, ensurePP(c.pp_code, c.pc, c.wh_date, c.rider, c.shop_name));

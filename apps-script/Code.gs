@@ -18,8 +18,8 @@ var ADMIN_TAB = 'Admin';
 var SKU_TAB   = 'EAN SKU Details';
 var SCAN_TAB_PREFIX = 'Scan Data ';
 // Once-a-day auto-sync times (24h, in the script's timezone). Change these to fit your shift.
-var SYNC_OUT_HOUR = 6;    // ~6 AM: push the day's pending crates into the app
-var SYNC_IN_HOUR  = 21;   // ~9 PM: write the day's scans back to the sheets
+var SYNC_OUT_HOUR = 5;    // ~5 AM: fresh-load the day's pending crates BEFORE the 6 AM shift
+var SYNC_IN_HOUR  = 18;   // ~6 PM: after the 5 PM shift ends, write the day's scans back to the sheets
 
 // ---- menu -------------------------------------------------------------------
 function onOpen() {
@@ -27,6 +27,7 @@ function onOpen() {
     .addItem('Sync out — push pending crates to app', 'syncOut')
     .addItem('Sync in — pull scan results into sheets', 'syncIn')
     .addItem('Sync both now', 'syncBoth')
+    .addItem('Fresh reload — clear + load today (new day)', 'morningLoad')
     .addSeparator()
     .addItem('Install daily auto-sync (morning out · evening in)', 'installDailyTriggers')
     .addItem('Remove all auto-sync', 'removeTrigger')
@@ -36,7 +37,8 @@ function syncBoth() { const o = syncOut(); const i = syncIn(); toast(`Out: ${o.r
 function toast(m) { try { SpreadsheetApp.getActive().toast(m, 'MM Reverse', 8); } catch (_) { Logger.log(m); } }
 
 // ---- SYNC OUT: read every rider's latest date tab → push pending crates ------
-function syncOut() {
+function morningLoad() { return syncOut(true); }   // fresh reset + load — the daily morning trigger
+function syncOut(reset) {
   var master = SpreadsheetApp.openById(MASTER_ID);
   var skus = buildSkuList(master);
   var shops = buildPpShopMap(master);
@@ -72,8 +74,8 @@ function syncOut() {
       });
     }
   });
-  var res = post('/api/ingest', { skus: skus, rows: rows });
-  toast('Sync out: pushed ' + rows.length + ' rows → ' + (res.added != null ? res.added + ' crates' : JSON.stringify(res)));
+  var res = post('/api/ingest', { skus: skus, rows: rows, reset: !!reset });
+  toast('Sync out' + (reset ? ' (fresh reset)' : '') + ': pushed ' + rows.length + ' rows → ' + (res.added != null ? res.added + ' crates' : JSON.stringify(res)));
   return { rows: rows.length, res: res };
 }
 
@@ -121,12 +123,12 @@ function syncIn() {
 // Manual "Sync out / Sync in / Sync both now" from the menu still work anytime, independently.
 function installDailyTriggers() {
   removeTrigger();   // clear any existing MM Reverse triggers first, so nothing ever stacks
-  ScriptApp.newTrigger('syncOut').timeBased().everyDays(1).atHour(SYNC_OUT_HOUR).create();
-  ScriptApp.newTrigger('syncIn').timeBased().everyDays(1).atHour(SYNC_IN_HOUR).create();
-  toast('Daily auto-sync on — syncOut ~' + SYNC_OUT_HOUR + ':00, syncIn ~' + SYNC_IN_HOUR + ':00. Old triggers removed. (Manual Sync still works anytime.)');
+  ScriptApp.newTrigger('morningLoad').timeBased().everyDays(1).atHour(SYNC_OUT_HOUR).create();   // fresh load before the shift
+  ScriptApp.newTrigger('syncIn').timeBased().everyDays(1).atHour(SYNC_IN_HOUR).create();           // save scans after the shift
+  toast('Daily auto-sync on — fresh load ~' + SYNC_OUT_HOUR + ':00, save scans ~' + SYNC_IN_HOUR + ':00. Old triggers removed. (Manual Sync still works anytime.)');
 }
 function removeTrigger() {
-  var fns = ['syncBoth', 'syncOut', 'syncIn'];
+  var fns = ['syncBoth', 'syncOut', 'syncIn', 'morningLoad'];
   ScriptApp.getProjectTriggers().forEach(function (t) { if (fns.indexOf(t.getHandlerFunction()) !== -1) ScriptApp.deleteTrigger(t); });
 }
 
