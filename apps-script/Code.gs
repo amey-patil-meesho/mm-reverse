@@ -17,16 +17,19 @@ var MASTER_ID = '1zGfOjfPzVHzyMvx7oObkmyd-UUaEMWXjapIvxGVNyPQ';
 var ADMIN_TAB = 'Admin';
 var SKU_TAB   = 'EAN SKU Details';
 var SCAN_TAB_PREFIX = 'Scan Data ';
+// Once-a-day auto-sync times (24h, in the script's timezone). Change these to fit your shift.
+var SYNC_OUT_HOUR = 6;    // ~6 AM: push the day's pending crates into the app
+var SYNC_IN_HOUR  = 21;   // ~9 PM: write the day's scans back to the sheets
 
 // ---- menu -------------------------------------------------------------------
 function onOpen() {
   SpreadsheetApp.getUi().createMenu('MM Reverse')
     .addItem('Sync out — push pending crates to app', 'syncOut')
     .addItem('Sync in — pull scan results into sheets', 'syncIn')
-    .addSeparator()
     .addItem('Sync both now', 'syncBoth')
-    .addItem('Install auto-sync (every 5 min)', 'installTrigger')
-    .addItem('Remove auto-sync', 'removeTrigger')
+    .addSeparator()
+    .addItem('Install daily auto-sync (morning out · evening in)', 'installDailyTriggers')
+    .addItem('Remove all auto-sync', 'removeTrigger')
     .addToUi();
 }
 function syncBoth() { const o = syncOut(); const i = syncIn(); toast(`Out: ${o.rows} rows · In: ${i.written} scan rows`); }
@@ -114,13 +117,17 @@ function syncIn() {
 }
 
 // ---- auto-sync trigger ------------------------------------------------------
-function installTrigger() {
-  removeTrigger();   // clear any existing triggers first, so they never stack
-  ScriptApp.newTrigger('syncBoth').timeBased().everyMinutes(10).create();
-  toast('Auto-sync installed (every 10 min). Any old triggers were removed first.');
+// Two once-a-day triggers: load pending in the morning, save scans in the evening.
+// Manual "Sync out / Sync in / Sync both now" from the menu still work anytime, independently.
+function installDailyTriggers() {
+  removeTrigger();   // clear any existing MM Reverse triggers first, so nothing ever stacks
+  ScriptApp.newTrigger('syncOut').timeBased().everyDays(1).atHour(SYNC_OUT_HOUR).create();
+  ScriptApp.newTrigger('syncIn').timeBased().everyDays(1).atHour(SYNC_IN_HOUR).create();
+  toast('Daily auto-sync on — syncOut ~' + SYNC_OUT_HOUR + ':00, syncIn ~' + SYNC_IN_HOUR + ':00. Old triggers removed. (Manual Sync still works anytime.)');
 }
 function removeTrigger() {
-  ScriptApp.getProjectTriggers().forEach(function (t) { if (t.getHandlerFunction() === 'syncBoth') ScriptApp.deleteTrigger(t); });
+  var fns = ['syncBoth', 'syncOut', 'syncIn'];
+  ScriptApp.getProjectTriggers().forEach(function (t) { if (fns.indexOf(t.getHandlerFunction()) !== -1) ScriptApp.deleteTrigger(t); });
 }
 
 // ---- HTTP -------------------------------------------------------------------
