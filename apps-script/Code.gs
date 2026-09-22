@@ -115,9 +115,9 @@ function syncIn() {
 
 // ---- auto-sync trigger ------------------------------------------------------
 function installTrigger() {
-  removeTrigger();
-  ScriptApp.newTrigger('syncBoth').timeBased().everyMinutes(5).create();
-  toast('Auto-sync installed (every 5 min).');
+  removeTrigger();   // clear any existing triggers first, so they never stack
+  ScriptApp.newTrigger('syncBoth').timeBased().everyMinutes(10).create();
+  toast('Auto-sync installed (every 10 min). Any old triggers were removed first.');
 }
 function removeTrigger() {
   ScriptApp.getProjectTriggers().forEach(function (t) { if (t.getHandlerFunction() === 'syncBoth') ScriptApp.deleteTrigger(t); });

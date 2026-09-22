@@ -1,6 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -252,7 +253,14 @@ function cratesFromRows(rows) {
 // Ingest a day's pending crates (bridge push or workbook upload). Refreshes the PENDING set only:
 // untouched pending PPs are replaced with the fresh data; any PP a rider has already started
 // (REACHED/…/LEFT) and its crates are left completely alone, so a mid-shift sync never resets work.
+let _lastIngestHash = null;
 export function ingest(payload = {}) {
+  // The auto-sync re-pushes the full dataset every few minutes, but it rarely changes during a
+  // shift. Skip the whole rebuild when the payload is identical to the last one — this stops the
+  // periodic event-loop freeze that made the app go blank for riders. (In-progress scans are
+  // untouched either way; ingest only ever rebuilds the PENDING set.)
+  const _hash = crypto.createHash('sha1').update(JSON.stringify([payload.skus || [], payload.rows || []])).digest('hex');
+  if (_hash === _lastIngestHash) return { added: 0, rows: payload.rows?.length || 0, crates: 0, unchanged: true };
   upsertSkus(payload.skus || []);
   const crates = cratesFromRows(payload.rows || []);
   let added = 0;
@@ -272,6 +280,7 @@ export function ingest(payload = {}) {
     }
     recomputeDemandForPending();
   });
+  _lastIngestHash = _hash;
   logCounts(`ingested (+${added} crates, ${payload.rows?.length || 0} rows)`);
   return { added, rows: payload.rows?.length || 0, crates: crates.length };
 }
