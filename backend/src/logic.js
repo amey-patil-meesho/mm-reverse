@@ -201,6 +201,48 @@ export function searchAddUnit(crateId, currentSkuId, query, rider) {
   return scanEan(crateId, currentSkuId, r.ean, rider);   // identity confirmed → register the unit
 }
 
+// Scan-first unit capture (no SKU pre-selection). Resolve the scanned code to a KNOWN sku and
+// count it: an expected sku counts down; a known-but-unexpected sku (older stock not in today's
+// list, or an over-scan past the expected qty) is still accepted and counted; an unknown code is
+// rejected as INVALID_SKU so the rider immediately sees it's wrong.
+export function scanUnit(crateId, code, rider) {
+  const crate = getCrate(crateId); if (!crate) notFound('Crate not found');
+  if (crate.status !== 'OPEN') bad('This crate is not open for scanning', 'CRATE_NOT_OPEN');
+  const q = String(code ?? '').trim();
+  if (!q) bad('Scan a unit barcode', 'EMPTY');
+  // resolve code → known sku (by EAN or sku_id): SKU catalog first, then this PP's demand rows
+  const cat = db.prepare('SELECT sku_id, sku_name, ean FROM sku_catalog WHERE ean=? OR sku_id=?').get(q, q)
+    || db.prepare('SELECT sku_id, sku_name, ean FROM pp_rto_demand WHERE pp_id=? AND (ean=? OR sku_id=?)').get(crate.pp_id, q, q);
+  if (!cat) bad(`Invalid item — barcode “${q}” is not in the system.`, 'INVALID_SKU');
+  const skuId = cat.sku_id, skuName = cat.sku_name || `SKU ${skuId}`, ean = cat.ean || q;
+  const riderName = rider && typeof rider === 'object' ? (rider.name ?? null) : (rider ?? null);
+
+  tx(() => {
+    const d = db.prepare('SELECT * FROM pp_rto_demand WHERE pp_id=? AND sku_id=?').get(crate.pp_id, skuId);
+    if (d) db.prepare('UPDATE pp_rto_demand SET scanned_qty=scanned_qty+1 WHERE id=?').run(d.id);
+    else db.prepare(`INSERT INTO pp_rto_demand (pp_id,sku_id,sku_name,ean,expected_qty,scanned_qty,status) VALUES (?,?,?,?,0,1,'OPEN')`).run(crate.pp_id, skuId, skuName, ean);
+    db.prepare('INSERT INTO scan_events (crate_id,pp_id,sku_id,ean,rider,scanned_at) VALUES (?,?,?,?,?,?)').run(crateId, crate.pp_id, skuId, q, riderName, nowIso());
+  });
+
+  const fresh = db.prepare('SELECT * FROM pp_rto_demand WHERE pp_id=? AND sku_id=?').get(crate.pp_id, skuId);
+  if (fresh.expected_qty > 0 && fresh.scanned_qty >= fresh.expected_qty && fresh.status === 'OPEN')
+    db.prepare(`UPDATE pp_rto_demand SET status='CLOSED' WHERE id=?`).run(fresh.id);
+
+  let crateFull = false;
+  if (crate.capacity && crateLoad(crateId) >= crate.capacity && crate.status === 'OPEN') {
+    db.prepare(`UPDATE crates SET status='CLOSED', closed_reason='CAPACITY', closed_at=? WHERE crate_id=?`).run(nowIso(), crateId);
+    crateFull = true;
+  }
+
+  const remaining = Math.max(0, fresh.expected_qty - fresh.scanned_qty);
+  const unexpected = fresh.expected_qty === 0;
+  const message = crateFull ? `Crate full — closed. Scan a new RTO crate for the rest.`
+    : unexpected ? `${skuName} · accepted (extra — not in today's list). ${fresh.scanned_qty} scanned.`
+    : remaining > 0 ? `${skuName} · ${fresh.scanned_qty}/${fresh.expected_qty} — ${remaining} more to scan`
+    : `${skuName} · ${fresh.scanned_qty}/${fresh.expected_qty} — done ✓`;
+  return { ...ppView(crate.pp_id), event: { ok: true, sku_id: skuId, sku_name: skuName, scanned: fresh.scanned_qty, expected: fresh.expected_qty, remaining, unexpected, crate_full: crateFull, message } };
+}
+
 export function closeDemandSku(ppId, skuId) {
   const d = db.prepare('SELECT * FROM pp_rto_demand WHERE pp_id=? AND sku_id=?').get(ppId, skuId);
   if (!d) bad(`SKU ${skuId} is not expected at this PP`, 'WRONG_SKU');

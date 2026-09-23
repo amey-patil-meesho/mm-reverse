@@ -10,17 +10,18 @@ const CRATE_BADGE = {
 };
 const SKU_BADGE = { OPEN: ['grey', 'Open'], CLOSED: ['green', 'Done'], SHORT_CLOSED: ['amber', 'Short'] };
 
+// Haptic feedback so riders feel success/error without staring at the screen.
+const buzz = (ok) => { try { navigator.vibrate && navigator.vibrate(ok ? 55 : [90, 60, 90]); } catch { /* noop */ } };
+
 export default function RiderFlow() {
   const [view, setView] = useState('login');
   const [rider, setRider] = useState(null);   // { name, phone }
-  const [roster, setRoster] = useState([]);    // placeholder logins (demo hint)
+  const [roster, setRoster] = useState([]);
   const [phone, setPhone] = useState('');
-  const [skuSearch, setSkuSearch] = useState('');   // in-SKU identify: name / last-5 of EAN
-  const [redirect, setRedirect] = useState(null);   // { sku_id, sku_name } when item belongs to another SKU
   const [pps, setPps] = useState([]);
   const [pv, setPv] = useState(null);       // full PP view (single source of truth)
-  const [skuId, setSkuId] = useState(null);
   const [msg, setMsg] = useState(null);
+  const [fx, setFx] = useState(null);       // last scan result on the crate screen { kind, message }
   const [modal, setModal] = useState(null);
 
   const flash = (kind, text) => setMsg({ kind, text });
@@ -33,22 +34,26 @@ export default function RiderFlow() {
   const refreshPPs = async () => setPps((await api.riderPPs(rider.phone)).pps);
   const openPP = guard(async (ppId) => { setPv(await api.pp(ppId)); setView('pp'); });
 
-  const activeCrateId = () => pv?.active_crate?.crate_id;
-
   const doAction = guard(async (key) => {
     const ppId = pv.pp.pp_id;
     if (key === 'reach') return setPv(await api.reach(ppId));
     if (key === 'close_all_rto') { setPv(await api.closeRto(ppId)); return flash('ok', 'All RTO crates closed'); }
     if (key === 'close_all_empty') { setPv(await api.closeEmpty(ppId)); return flash('ok', 'All empty crates closed'); }
     if (key === 'leave') { await api.leave(ppId); await refreshPPs(); setView('pps'); return flash('ok', `${pv.pp.pp_code} closed`); }
-    if (key === 'scan_ean') return setView('crate');
+    if (key === 'scan_ean') { setFx(null); return setView('crate'); }
     if (key === 'scan_rto_crate') {
-      return setModal({ type: 'crate', title: 'Scan RTO Crate', hint: 'Scan an available crate to consolidate RTO units into.',
-        onScan: guard(async (id) => { setPv(await api.scanRtoCrate(ppId, id)); setModal(null); setView('crate'); }) });
+      return setModal({
+        title: 'Scan RTO Crate', hint: 'Scan an available crate to fill this PP’s RTO units into.',
+        okWord: 'ready to fill', run: async (id) => { setPv(await api.scanRtoCrate(ppId, id)); },
+        done: () => { setFx(null); setView('crate'); },
+      });
     }
     if (key === 'scan_empty_crate') {
-      return setModal({ type: 'crate', title: 'Scan Empty Crate', hint: 'Empty crates do not need sealing.',
-        onScan: guard(async (id) => { setPv(await api.scanEmptyCrate(ppId, id)); setModal(null); flash('ok', `Empty crate ${id} scanned`); }) });
+      return setModal({
+        title: 'Scan Empty Crate', hint: 'Empty crates don’t need sealing — just scan to return them.',
+        okWord: 'returned empty', run: async (id) => { setPv(await api.scanEmptyCrate(ppId, id)); },
+        done: () => flash('ok', 'Empty crate scanned'),
+      });
     }
   });
 
@@ -144,113 +149,85 @@ export default function RiderFlow() {
     );
   }
 
+  // ---- scan-first crate screen: scan any unit; the app identifies it and counts it ----
   if (view === 'crate' && pv?.active_crate) {
     const crate = pv.active_crate;
     const pct = crate.capacity ? Math.min(100, Math.round((crate.load / crate.capacity) * 100)) : 0;
-    // Closing an open crate finalises it (no seal). Active clears → back to the PP menu.
+    const expected = pv.demand.filter((s) => s.expected_qty > 0);
+    const extras = pv.demand.filter((s) => s.expected_qty === 0 && s.scanned_qty > 0);
+
+    const scan = async (code) => {
+      clearMsg();
+      try {
+        const res = await api.scanUnit(crate.crate_id, code, rider?.name);
+        const ev = res.event || {};
+        setPv(res); buzz(true);
+        if (ev.crate_full) { setFx(null); setView('pp'); return flash('warn', ev.message); }
+        setFx({ kind: 'ok', message: ev.message });
+      } catch (e) { buzz(false); setFx({ kind: 'err', message: e.message }); }
+    };
     const closeCrate = guard(async () => { const cid = crate.crate_id; setPv(await api.closeCrate(cid)); setView('pp'); flash('ok', `Crate ${cid} closed — ready for dispatch`); });
+
     return (
       <>
-        <TopBar title={`Crate ${crate.crate_id}`} sub={`Consolidate RTO · ${crate.load}/${crate.capacity} units`} onBack={() => { setView('pp'); clearMsg(); }} />
+        <TopBar title={`Crate ${crate.crate_id}`} sub={`Scan units · ${crate.load}/${crate.capacity}`} onBack={() => { setView('pp'); setFx(null); clearMsg(); }} />
         <div className="wrap">
           {msg && <Note kind={msg.kind}>{msg.text}</Note>}
+
+          {/* big, unmissable result of the last scan */}
+          <div className={`scanfx ${fx ? fx.kind : 'idle'}`}>
+            {fx ? (<><span className="scanfx-ic">{fx.kind === 'ok' ? '✓' : '✕'}</span><span>{fx.message}</span></>)
+              : <span className="muted">Scan a unit to begin — the app will identify it.</span>}
+          </div>
+
+          <ScanInput label="Scan any unit barcode / EAN" placeholder="Scan or type barcode" onScan={scan} cameraLabel="Scan unit" />
+
           <div className="card">
-            <div className="row spread"><span className="small muted">Crate load (units)</span><span className="small">{crate.load}/{crate.capacity}</span></div>
+            <div className="row spread"><span className="small muted">Crate load</span><span className="small">{crate.load}/{crate.capacity}</span></div>
             <div className={`progress ${pct >= 100 ? 'full' : ''}`}><i style={{ width: `${pct}%` }} /></div>
           </div>
 
           <div className="card">
-            <div className="small muted" style={{ marginBottom: 4 }}>RTO units at this PP — tap the SKU you're holding to scan its units into this crate</div>
-            {pv.demand.map((s) => {
+            <div className="small muted" style={{ marginBottom: 6 }}>Expected at this PP</div>
+            {expected.length ? expected.map((s) => {
               const [cls, lbl] = SKU_BADGE[s.status] || ['grey', s.status];
-              const tappable = s.status === 'OPEN';
+              const done = s.scanned_qty >= s.expected_qty;
               return (
-                <div key={s.sku_id} className="skuitem" style={{ cursor: tappable ? 'pointer' : 'default', opacity: tappable ? 1 : .7 }}
-                  onClick={() => { if (tappable) { setRedirect(null); setSkuSearch(''); setSkuId(s.sku_id); setView('sku'); clearMsg(); } }}>
+                <div key={s.sku_id} className="skuitem">
                   <div>
                     <div style={{ fontWeight: 600 }}>{s.sku_name}</div>
-                    <div className="small muted mono">{s.sku_id} · EAN {s.ean}</div>
+                    <div className="small muted mono">{s.sku_id}{s.ean ? ` · EAN ${s.ean}` : ''}</div>
                     {s.status === 'SHORT_CLOSED' && <div className="small" style={{ color: 'var(--amber)' }}>{s.missing_qty} missing</div>}
                   </div>
                   <div style={{ textAlign: 'right' }}>
-                    <div className="big" style={{ fontSize: 18 }}>{s.scanned_qty}/{s.expected_qty}</div>
+                    <div className="big" style={{ fontSize: 18, color: done ? 'var(--green)' : 'inherit' }}>{s.scanned_qty}/{s.expected_qty}</div>
                     <span className={`badge ${cls}`}>{lbl}</span>
                   </div>
                 </div>
               );
-            })}
+            }) : <div className="small muted">No expected RTO units — scan empties instead.</div>}
           </div>
+
+          {extras.length > 0 && (
+            <div className="card">
+              <div className="small muted" style={{ marginBottom: 6 }}>Extra scanned (not in today's list)</div>
+              {extras.map((s) => (
+                <div key={s.sku_id} className="skuitem">
+                  <div><div style={{ fontWeight: 600 }}>{s.sku_name}</div><div className="small muted mono">{s.sku_id}</div></div>
+                  <div className="big" style={{ fontSize: 18 }}>{s.scanned_qty}</div>
+                </div>
+              ))}
+            </div>
+          )}
 
           <button className="btn ghost" onClick={closeCrate}>Done — close this crate</button>
         </div>
-      </>
-    );
-  }
-
-  if (view === 'sku' && pv?.active_crate) {
-    const crate = pv.active_crate;
-    const sku = pv.demand.find((s) => s.sku_id === skuId);
-    if (!sku) { setView('crate'); return null; }
-    const missing = sku.expected_qty - sku.scanned_qty;
-    const applyEvent = (res, okMsg) => {
-      setPv(res);
-      const ev = res.event || {};
-      if (ev.crate_full) return setModal({ type: 'full' });
-      if (ev.demand_done) { setView('pp'); return flash('ok', 'All RTO units packed — crate closed'); }
-      if (ev.sku_done) return setView('crate');
-      flash('ok', okMsg(res.demand.find((s) => s.sku_id === skuId)));
-    };
-    // WRONG_SKU_HERE → the item belongs to another SKU; capture it so we can redirect the rider.
-    const onErr = (e) => { setRedirect(e.code === 'WRONG_SKU_HERE' && e.data?.sku_id ? e.data : null); flash('err', e.message); };
-    const scan = async (ean) => { try { clearMsg(); setRedirect(null); applyEvent(await api.scanEan(crate.crate_id, skuId, ean, rider?.name), (u) => `Scanned — ${u.scanned_qty}/${u.expected_qty}`); } catch (e) { onErr(e); } };
-    // search-validated add: resolves the typed item and only counts it if it IS this SKU
-    const identify = async () => { const q = skuSearch.trim(); if (!q) return; try { clearMsg(); setRedirect(null); const res = await api.searchAdd(crate.crate_id, skuId, q, rider?.name); setSkuSearch(''); applyEvent(res, (u) => `Confirmed ${sku.sku_name} — added, ${u.scanned_qty}/${u.expected_qty}`); } catch (e) { onErr(e); } };
-    const goToSku = () => { const t = redirect; setRedirect(null); setSkuSearch(''); clearMsg(); setSkuId(t.sku_id); };
-    const closeShort = guard(async () => { setPv(await api.closeSku(pv.pp.pp_id, skuId)); setModal(null); setView('crate'); });
-    return (
-      <>
-        <TopBar title={sku.sku_name} sub={`${sku.sku_id} · scan every unit`} onBack={() => { setRedirect(null); setSkuSearch(''); setView('crate'); clearMsg(); }} />
-        <div className="wrap">
-          {msg && <Note kind={msg.kind}>{msg.text}</Note>}
-          <div className="card" style={{ textAlign: 'center' }}>
-            <div className="small muted">Units scanned into {crate.crate_id}</div>
-            <div className="big">{sku.scanned_qty} <span className="muted" style={{ fontSize: 16 }}>/ {sku.expected_qty}</span></div>
-            <div className="small muted mono">Accepts only EAN {sku.ean}</div>
-          </div>
-          <ScanInput label="Scan a unit barcode (EAN)" placeholder="Scan unit EAN" onScan={scan} cameraLabel={`Scan ${sku.sku_name}`} />
-
-          {redirect && (<>
-            <Note kind="err">That item is <b>{redirect.sku_name}</b> ({redirect.sku_id}) — not {sku.sku_name}. Add it under {redirect.sku_name}.</Note>
-            <button className="btn pink" onClick={goToSku}>Go to {redirect.sku_name} →</button>
-          </>)}
-
-          {missing > 0 && (
-            <div className="card" style={{ marginTop: 12 }}>
-              <div className="small muted" style={{ marginBottom: 4 }}>Can’t scan / EAN tarnished? Identify the item in hand</div>
-              <div className="scanbox">
-                <input value={skuSearch} placeholder="SKU name or last 5 digits of EAN" onChange={(e) => setSkuSearch(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === 'Enter') identify(); }} />
-                <button className="btn primary sm" onClick={identify}>Find &amp; add</button>
-              </div>
-              <div className="small muted" style={{ marginTop: 6 }}>It’s counted only if it’s actually {sku.sku_name}; otherwise we point you to the right SKU.</div>
-            </div>
-          )}
-          {missing > 0 && <button className="btn ghost" onClick={() => setModal({ type: 'short', missing })}>Close SKU ({missing} short)</button>}
-
-          {modal?.type === 'short' && (
-            <Modal title="Close SKU with missing units?" onClose={() => setModal(null)}
-              actions={<><button className="btn pink" onClick={closeShort}>Yes, close ({modal.missing} missing)</button>
-                <button className="btn grey" onClick={() => setModal(null)}>Keep scanning</button></>}>
-              {modal.missing} unit(s) of <b>{sku.sku_name}</b> are missing. They will be recorded as short.
-            </Modal>
-          )}
-          {modal?.type === 'full' && (
-            <Modal title="This crate is full" onClose={() => { setModal(null); setView('pp'); }}
-              actions={<button className="btn primary" onClick={() => { setModal(null); setView('pp'); }}>OK, use a different crate</button>}>
-              This crate is full, please use a different crate for the rest of the units. The crate has been closed automatically.
-            </Modal>
-          )}
-        </div>
+        {modal?.type === 'full' && (
+          <Modal title="This crate is full" onClose={() => { setModal(null); setView('pp'); }}
+            actions={<button className="btn primary" onClick={() => { setModal(null); setView('pp'); }}>OK, use a different crate</button>}>
+            The crate is full and has been closed automatically. Scan a new RTO crate for the remaining units.
+          </Modal>
+        )}
       </>
     );
   }
@@ -258,12 +235,29 @@ export default function RiderFlow() {
   return null;
 }
 
+// Crate-scan modal with clear ✓/✗ feedback. Stays open on error so the rider can retry; on
+// success it confirms, buzzes, then advances.
 function ScanCrateModal({ modal, onClose }) {
+  const [result, setResult] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const handle = async (id) => {
+    if (busy) return;
+    setBusy(true); setResult(null);
+    try {
+      await modal.run(id);
+      buzz(true);
+      setResult({ ok: true, text: `✓ ${id} — ${modal.okWord || 'scanned'}` });
+      setTimeout(() => { onClose(); modal.done && modal.done(); }, 800);
+    } catch (e) {
+      buzz(false);
+      setResult({ ok: false, text: `✕ ${e.message}` });
+    } finally { setBusy(false); }
+  };
   return (
     <Modal title={modal.title} onClose={onClose} actions={<button className="btn grey" onClick={onClose}>Cancel</button>}>
       <div style={{ marginBottom: 10 }}>{modal.hint}</div>
-      <ScanInput placeholder="Scan crate id (e.g. CR1003)" onScan={modal.onScan} buttonLabel="Bind" />
+      {result && <div className={`note ${result.ok ? 'ok' : 'err'}`} style={{ marginBottom: 10, fontWeight: 600 }}>{result.text}</div>}
+      {!result?.ok && <ScanInput placeholder="Scan crate id" onScan={handle} buttonLabel="Scan" />}
     </Modal>
   );
 }
-
