@@ -207,13 +207,18 @@ export function searchAddUnit(crateId, currentSkuId, query, rider) {
 // rejected as INVALID_SKU so the rider immediately sees it's wrong.
 export function scanUnit(crateId, code, rider) {
   const crate = getCrate(crateId); if (!crate) notFound('Crate not found');
-  if (crate.status !== 'OPEN') bad('This crate is not open for scanning', 'CRATE_NOT_OPEN');
+  if (crate.status !== 'OPEN') bad('Not accepted — this crate is already closed. Go back and scan a new RTO crate.', 'CRATE_NOT_OPEN');
   const q = String(code ?? '').trim();
-  if (!q) bad('Scan a unit barcode', 'EMPTY');
+  if (!q) bad('No barcode read — please scan again.', 'EMPTY');
   // resolve code → known sku (by EAN or sku_id): SKU catalog first, then this PP's demand rows
   const cat = db.prepare('SELECT sku_id, sku_name, ean FROM sku_catalog WHERE ean=? OR sku_id=?').get(q, q)
     || db.prepare('SELECT sku_id, sku_name, ean FROM pp_rto_demand WHERE pp_id=? AND (ean=? OR sku_id=?)').get(crate.pp_id, q, q);
-  if (!cat) bad(`Invalid item — barcode “${q}” is not in the system.`, 'INVALID_SKU');
+  if (!cat) {
+    // rejected — say exactly why so the rider can correct it
+    if (db.prepare('SELECT 1 FROM crates WHERE crate_id=?').get(q))
+      bad(`Not accepted — “${q}” is a crate barcode, not a product. Scan the item's own barcode.`, 'CRATE_NOT_PRODUCT');
+    bad(`Not accepted — “${q}” isn't a known product (not in the system). Check you scanned the item's barcode, not the label/box.`, 'INVALID_SKU');
+  }
   const skuId = cat.sku_id, skuName = cat.sku_name || `SKU ${skuId}`, ean = cat.ean || q;
   const riderName = rider && typeof rider === 'object' ? (rider.name ?? null) : (rider ?? null);
 
@@ -236,11 +241,15 @@ export function scanUnit(crateId, code, rider) {
 
   const remaining = Math.max(0, fresh.expected_qty - fresh.scanned_qty);
   const unexpected = fresh.expected_qty === 0;
+  const over = fresh.expected_qty > 0 && fresh.scanned_qty > fresh.expected_qty;
+  // ok = normal expected scan; warn = accepted-but-unusual (extra / over / crate full)
+  const kind = (crateFull || unexpected || over) ? 'warn' : 'ok';
   const message = crateFull ? `Crate full — closed. Scan a new RTO crate for the rest.`
-    : unexpected ? `${skuName} · accepted (extra — not in today's list). ${fresh.scanned_qty} scanned.`
+    : unexpected ? `Accepted, but heads-up: ${skuName} isn't in today's list for this PP (extra) — now ${fresh.scanned_qty} scanned.`
+    : over ? `Accepted, but heads-up: ${skuName} was already complete — now ${fresh.scanned_qty}/${fresh.expected_qty} (extra).`
     : remaining > 0 ? `${skuName} · ${fresh.scanned_qty}/${fresh.expected_qty} — ${remaining} more to scan`
     : `${skuName} · ${fresh.scanned_qty}/${fresh.expected_qty} — done ✓`;
-  return { ...ppView(crate.pp_id), event: { ok: true, sku_id: skuId, sku_name: skuName, scanned: fresh.scanned_qty, expected: fresh.expected_qty, remaining, unexpected, crate_full: crateFull, message } };
+  return { ...ppView(crate.pp_id), event: { ok: true, kind, sku_id: skuId, sku_name: skuName, scanned: fresh.scanned_qty, expected: fresh.expected_qty, remaining, unexpected, over, crate_full: crateFull, message } };
 }
 
 export function closeDemandSku(ppId, skuId) {

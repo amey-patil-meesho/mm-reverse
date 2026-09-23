@@ -10,8 +10,9 @@ const CRATE_BADGE = {
 };
 const SKU_BADGE = { OPEN: ['grey', 'Open'], CLOSED: ['green', 'Done'], SHORT_CLOSED: ['amber', 'Short'] };
 
-// Haptic feedback so riders feel success/error without staring at the screen.
-const buzz = (ok) => { try { navigator.vibrate && navigator.vibrate(ok ? 55 : [90, 60, 90]); } catch { /* noop */ } };
+// Haptic feedback so riders feel the result without staring at the screen:
+// ok = short, warn = double, err = long-double.
+const buzz = (kind) => { try { navigator.vibrate && navigator.vibrate(kind === 'ok' ? 55 : kind === 'warn' ? [40, 60, 40] : [90, 60, 90]); } catch { /* noop */ } };
 
 export default function RiderFlow() {
   const [view, setView] = useState('login');
@@ -161,10 +162,11 @@ export default function RiderFlow() {
       try {
         const res = await api.scanUnit(crate.crate_id, code, rider?.name);
         const ev = res.event || {};
-        setPv(res); buzz(true);
+        const kind = ev.kind || 'ok';
+        setPv(res); buzz(kind);
         if (ev.crate_full) { setFx(null); setView('pp'); return flash('warn', ev.message); }
-        setFx({ kind: 'ok', message: ev.message });
-      } catch (e) { buzz(false); setFx({ kind: 'err', message: e.message }); }
+        setFx({ kind, message: ev.message });
+      } catch (e) { buzz('err'); setFx({ kind: 'err', message: e.message }); }
     };
     const closeCrate = guard(async () => { const cid = crate.crate_id; setPv(await api.closeCrate(cid)); setView('pp'); flash('ok', `Crate ${cid} closed — ready for dispatch`); });
 
@@ -176,7 +178,7 @@ export default function RiderFlow() {
 
           {/* big, unmissable result of the last scan */}
           <div className={`scanfx ${fx ? fx.kind : 'idle'}`}>
-            {fx ? (<><span className="scanfx-ic">{fx.kind === 'ok' ? '✓' : '✕'}</span><span>{fx.message}</span></>)
+            {fx ? (<><span className="scanfx-ic">{fx.kind === 'ok' ? '✓' : fx.kind === 'warn' ? '!' : '✕'}</span><span>{fx.message}</span></>)
               : <span className="muted">Scan a unit to begin — the app will identify it.</span>}
           </div>
 
@@ -245,11 +247,11 @@ function ScanCrateModal({ modal, onClose }) {
     setBusy(true); setResult(null);
     try {
       await modal.run(id);
-      buzz(true);
+      buzz('ok');
       setResult({ ok: true, text: `✓ ${id} — ${modal.okWord || 'scanned'}` });
       setTimeout(() => { onClose(); modal.done && modal.done(); }, 800);
     } catch (e) {
-      buzz(false);
+      buzz('err');
       setResult({ ok: false, text: `✕ ${e.message}` });
     } finally { setBusy(false); }
   };
