@@ -24,12 +24,26 @@ export default function RiderFlow() {
   const [msg, setMsg] = useState(null);
   const [fx, setFx] = useState(null);       // last scan result on the crate screen { kind, message }
   const [modal, setModal] = useState(null);
+  const [searchQ, setSearchQ] = useState('');   // "can't scan?" find-by-name/EAN
+  const [results, setResults] = useState([]);
 
   const flash = (kind, text) => setMsg({ kind, text });
   const clearMsg = () => setMsg(null);
   const guard = (fn) => async (...a) => { try { clearMsg(); await fn(...a); } catch (e) { flash('err', e.message); } };
 
   React.useEffect(() => { api.riders().then((r) => setRoster(r.riders)).catch(() => {}); }, []);
+
+  // Debounced "find the item" search on the crate screen (name / EAN digits / sku_id).
+  React.useEffect(() => {
+    const q = searchQ.trim();
+    if (q.length < 2 || view !== 'crate' || !pv?.active_crate) { setResults([]); return; }
+    let cancel = false;
+    const t = setTimeout(async () => {
+      try { const r = await api.skuSearch(pv.pp.pp_id, q); if (!cancel) setResults(r.skus || []); }
+      catch { if (!cancel) setResults([]); }
+    }, 220);
+    return () => { cancel = true; clearTimeout(t); };
+  }, [searchQ]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const login = guard(async (num) => { const res = await api.login(num ?? phone); setRider(res.rider); setPps(res.pps); setView('pps'); });
   const refreshPPs = async () => setPps((await api.riderPPs(rider.phone)).pps);
@@ -169,6 +183,7 @@ export default function RiderFlow() {
       } catch (e) { buzz('err'); setFx({ kind: 'err', message: e.message }); }
     };
     const closeCrate = guard(async () => { const cid = crate.crate_id; setPv(await api.closeCrate(cid)); setView('pp'); flash('ok', `Crate ${cid} closed — ready for dispatch`); });
+    const pickResult = (s) => { setSearchQ(''); setResults([]); scan(s.sku_id); };
 
     return (
       <>
@@ -183,6 +198,22 @@ export default function RiderFlow() {
           </div>
 
           <ScanInput label="Scan any unit barcode / EAN" placeholder="Scan or type barcode" onScan={scan} cameraLabel="Scan unit" />
+
+          <div className="card">
+            <div className="small muted" style={{ marginBottom: 4 }}>Can't scan the barcode? Find the item by name or EAN</div>
+            <div className="scanbox"><input value={searchQ} placeholder="Type name or last digits of EAN" onChange={(e) => setSearchQ(e.target.value)} /></div>
+            {results.length > 0 && (
+              <div className="stack" style={{ marginTop: 8 }}>
+                {results.map((s) => (
+                  <div key={s.sku_id} className="skuitem tap" style={{ cursor: 'pointer' }} onClick={() => pickResult(s)}>
+                    <div><div style={{ fontWeight: 600 }}>{s.sku_name}</div><div className="small muted mono">{s.sku_id}{s.ean ? ` · EAN ${s.ean}` : ''}</div></div>
+                    {s.expected_here ? <span className="badge units">{s.scanned}/{s.expected}</span> : <span className="badge grey">extra</span>}
+                  </div>
+                ))}
+              </div>
+            )}
+            {searchQ.trim().length >= 2 && !results.length && <div className="small muted" style={{ marginTop: 6 }}>No matching item — check the name, or scan the barcode.</div>}
+          </div>
 
           <div className="card">
             <div className="row spread"><span className="small muted">Crate load</span><span className="small">{crate.load}/{crate.capacity}</span></div>

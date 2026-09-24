@@ -29,6 +29,7 @@ export const api = {
   leave: (ppId) => req('POST', `/pps/${ppId}/leave`),
   scanEan: (crateId, skuId, ean, rider) => req('POST', `/crates/${crateId}/scan-ean`, { skuId, ean, rider }),
   scanUnit: (crateId, code, rider) => req('POST', `/crates/${crateId}/scan-unit`, { code, rider }),
+  skuSearch: (ppId, q) => req('GET', `/pps/${ppId}/sku-search?q=${encodeURIComponent(q)}`),
   closeSku: (ppId, skuId) => req('POST', `/pps/${ppId}/demand/${skuId}/close`),
   searchAdd: (crateId, skuId, query, rider) => req('POST', `/crates/${crateId}/skus/${skuId}/search-add`, { query, rider }),
   closeCrate: (crateId) => req('POST', `/crates/${crateId}/close`),

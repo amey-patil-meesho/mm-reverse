@@ -67,6 +67,8 @@ api.post('/pps/:ppId/leave', wrap((req) => L.leavePP(Number(req.params.ppId))));
 api.post('/crates/:crateId/scan-ean', wrap((req) => L.scanEan(req.params.crateId, String(req.body.skuId || '').trim(), req.body.ean, req.body.rider)));
 // scan-first: no SKU pre-selection — resolve the scanned code to a SKU and count it (or reject)
 api.post('/crates/:crateId/scan-unit', wrap((req) => L.scanUnit(req.params.crateId, String(req.body.code || req.body.ean || '').trim(), req.body.rider)));
+// live "find the item" search (name / EAN / sku_id) for when a barcode won't scan
+api.get('/pps/:ppId/sku-search', wrap((req) => ({ skus: L.skuSearch(Number(req.params.ppId), req.query.q) })));
 api.post('/crates/:crateId/skus/:skuId/search-add', wrap((req) => L.searchAddUnit(req.params.crateId, req.params.skuId, req.body.query, req.body.rider)));
 api.post('/pps/:ppId/demand/:skuId/close', wrap((req) => L.closeDemandSku(Number(req.params.ppId), req.params.skuId)));
 api.post('/crates/:crateId/close', wrap((req) => L.closeCrate(req.params.crateId)));

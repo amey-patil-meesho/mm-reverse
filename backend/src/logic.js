@@ -252,6 +252,26 @@ export function scanUnit(crateId, code, rider) {
   return { ...ppView(crate.pp_id), event: { ok: true, kind, sku_id: skuId, sku_name: skuName, scanned: fresh.scanned_qty, expected: fresh.expected_qty, remaining, unexpected, over, crate_full: crateFull, message } };
 }
 
+// Live "find the item" search for when a barcode won't scan: match known SKUs by name, EAN
+// (incl. last digits), or sku_id. Returns this PP's expected SKUs first. Tapping a result scans
+// that SKU (scanUnit by sku_id), so the same expected/extra/over rules apply.
+export function skuSearch(ppId, query) {
+  const q = String(query ?? '').trim().toLowerCase();
+  if (q.length < 2) return [];
+  const like = '%' + q.replace(/[%_\\]/g, '') + '%';
+  const catRows = db.prepare(`SELECT sku_id, sku_name, ean FROM sku_catalog WHERE lower(sku_name) LIKE ? OR lower(ean) LIKE ? OR lower(sku_id) LIKE ? LIMIT 50`).all(like, like, like);
+  const demRows = db.prepare(`SELECT sku_id, sku_name, ean FROM pp_rto_demand WHERE pp_id=? AND (lower(sku_name) LIKE ? OR lower(ean) LIKE ? OR lower(sku_id) LIKE ?)`).all(ppId, like, like, like);
+  const seen = new Set(); const out = [];
+  for (const s of [...demRows, ...catRows]) {
+    if (seen.has(s.sku_id)) continue; seen.add(s.sku_id);
+    const d = db.prepare('SELECT expected_qty, scanned_qty FROM pp_rto_demand WHERE pp_id=? AND sku_id=?').get(ppId, s.sku_id);
+    const expected = d ? d.expected_qty : 0, scanned = d ? d.scanned_qty : 0;
+    out.push({ sku_id: s.sku_id, sku_name: s.sku_name || `SKU ${s.sku_id}`, ean: s.ean || '', expected_here: expected > 0, expected, scanned, remaining: Math.max(0, expected - scanned) });
+  }
+  out.sort((a, b) => (Number(b.expected_here) - Number(a.expected_here)) || String(a.sku_name).localeCompare(String(b.sku_name)));
+  return out.slice(0, 12);
+}
+
 export function closeDemandSku(ppId, skuId) {
   const d = db.prepare('SELECT * FROM pp_rto_demand WHERE pp_id=? AND sku_id=?').get(ppId, skuId);
   if (!d) bad(`SKU ${skuId} is not expected at this PP`, 'WRONG_SKU');
