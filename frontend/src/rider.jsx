@@ -127,6 +127,10 @@ export default function RiderFlow() {
 
   if (view === 'pp' && pv) {
     const { pp, actions, crates, demand_units, packed_units } = pv;
+    // Show ONE crate type at a time to avoid confusion: RTO crates during the RTO phase, then only
+    // empties once all RTO crates are closed. (Empties = EMPTY crates + RTO crates left unpacked.)
+    const rtoPhase = pp.stage === 'PENDING' || pp.stage === 'REACHED';
+    const visibleCrates = crates.filter((c) => rtoPhase ? c.type === 'RTO' : (c.type === 'EMPTY' || c.load === 0));
     return (
       <>
         <TopBar title={pp.pp_code} sub={`${pp.pp_cluster} · ${STAGE_LABEL[pp.stage] || pp.stage}`} onBack={() => { setView('pps'); refreshPPs(); clearMsg(); }} />
@@ -135,20 +139,21 @@ export default function RiderFlow() {
           {pp.stage === 'REACHED' && <Note kind="ok">{packed_units}/{demand_units} RTO units packed</Note>}
 
           <div className="card">
-            <div className="small muted" style={{ marginBottom: 8 }}>Crates at this PP</div>
-            {crates.map((c) => {
+            <div className="small muted" style={{ marginBottom: 8 }}>{rtoPhase ? 'RTO crates to pick at this PP' : 'Empty crates to return'}</div>
+            {visibleCrates.length ? visibleCrates.map((c) => {
               const [cls, lbl] = c.status === 'CREATED' && !c.eligible ? ['amber', 'Asset clearance'] : (CRATE_BADGE[c.status] || ['grey', c.status]);
+              const typeLabel = rtoPhase ? c.type : 'EMPTY';
               return (
                 <div key={c.crate_id} className="skuitem">
                   <div>
                     <span className="mono" style={{ fontWeight: 600 }}>{c.crate_id}</span>
-                    <span className="badge grey" style={{ marginLeft: 8 }}>{c.type}</span>
-                    <div className="small muted">created {c.created_date}{c.type === 'RTO' ? ` · ${c.cumulative_rto} RTO units${c.load ? `, ${c.load} packed` : ''}` : ''}</div>
+                    <span className="badge grey" style={{ marginLeft: 8 }}>{typeLabel}</span>
+                    <div className="small muted">created {c.created_date}{rtoPhase && c.type === 'RTO' ? ` · ${c.cumulative_rto} RTO units${c.load ? `, ${c.load} packed` : ''}` : ''}</div>
                   </div>
                   <span className={`badge ${cls}`}>{lbl}</span>
                 </div>
               );
-            })}
+            }) : <div className="small muted">{rtoPhase ? 'No RTO crates at this PP.' : 'No empty crates to return.'}</div>}
           </div>
 
           <div className="stack">
