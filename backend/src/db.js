@@ -210,14 +210,20 @@ function recomputeDemandForPending() {
   }
 }
 
-// Upsert the SKU master (sku_id -> name, ean). Safe to call repeatedly (each sync/upload).
+// Replace the SKU master (sku_id -> name, ean) with exactly what's sent — the bridge sends only
+// APPROVED EANs, so replacing (not merging) purges any previously-loaded non-approved ones.
+// Guarded: an empty push is ignored so a transient read never wipes the catalog.
 export function upsertSkus(skus = []) {
-  const up = db.prepare(`INSERT INTO sku_catalog (sku_id,sku_name,ean) VALUES (?,?,?)
-    ON CONFLICT(sku_id) DO UPDATE SET sku_name=excluded.sku_name, ean=excluded.ean`);
-  for (const s of skus) {
-    const id = String(s.sku_id ?? '').trim();
-    if (id) up.run(id, String(s.sku_name ?? '').trim() || null, String(s.ean ?? '').trim() || null);
-  }
+  if (!skus.length) return;
+  tx(() => {
+    db.exec('DELETE FROM sku_catalog;');
+    const up = db.prepare(`INSERT INTO sku_catalog (sku_id,sku_name,ean) VALUES (?,?,?)
+      ON CONFLICT(sku_id) DO UPDATE SET sku_name=excluded.sku_name, ean=excluded.ean`);
+    for (const s of skus) {
+      const id = String(s.sku_id ?? '').trim();
+      if (id) up.run(id, String(s.sku_name ?? '').trim() || null, String(s.ean ?? '').trim() || null);
+    }
+  });
 }
 
 // Group already-pending rows (from the bridge or an uploaded workbook) into one entry per crate.

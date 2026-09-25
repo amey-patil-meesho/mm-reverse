@@ -185,9 +185,12 @@ function buildSkuList(master) {
   var cId = pick(h, ['sku_id', 'sku id', 'sku']);
   var cEan = pick(h, ['ean', 'barcode', 'ean code']);
   var cName = pick(h, ['sku_name', 'name', 'item name', 'product', 'description']);
+  var cStatus = pick(h, ['status', 'ean status', 'approval status', 'approval']);
   var out = [];
   for (var i = 1; i < v.length && cId >= 0; i++) {
     var id = String(v[i][cId] || '').trim(); if (!id) continue;
+    // Only APPROVED EANs are usable in the app. If a status column exists, keep only APPROVED rows.
+    if (cStatus >= 0 && String(v[i][cStatus] || '').trim().toUpperCase() !== 'APPROVED') continue;
     out.push({ sku_id: id, ean: cEan >= 0 ? String(v[i][cEan] || '').trim() : '', sku_name: cName >= 0 ? String(v[i][cName] || '').trim() : '' });
   }
   return out;

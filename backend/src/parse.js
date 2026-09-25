@@ -48,10 +48,12 @@ export function parseWorkbook(buf) {
 
     // 1) rider-crate sheet (strongest signal: has a crate column + a PP column)
     if (cCrate >= 0 && cPP >= 0) { dataSheets.push({ H, rows: grid.slice(1) }); continue; }
-    // 2) EAN-SKU master
+    // 2) EAN-SKU master — only APPROVED EANs are usable
     if (cSkuId >= 0 && (cEan >= 0 || cSkuName >= 0)) {
+      const cStatus = pick(H, ['status', 'ean status', 'approval status', 'approval']);
       for (const r of grid.slice(1)) {
         const id = val(r, cSkuId); if (!id) continue;
+        if (cStatus >= 0 && val(r, cStatus).toUpperCase() !== 'APPROVED') continue;
         skus.push({ sku_id: id, ean: val(r, cEan), sku_name: cSkuName >= 0 ? val(r, cSkuName) : '' });
       }
       continue;
