@@ -40,7 +40,6 @@ function toast(m) { try { SpreadsheetApp.getActive().toast(m, 'MM Reverse', 8); 
 function morningLoad() { return syncOut(true); }   // fresh reset + load — the daily morning trigger
 function syncOut(reset) {
   var master = SpreadsheetApp.openById(MASTER_ID);
-  var skus = buildSkuList(master);
   var shops = buildPpShopMap(master);
   var dir = readAdmin(master);
   var rows = [];
@@ -74,6 +73,10 @@ function syncOut(reset) {
       });
     }
   });
+  // Load catalog entries only for the SKUs that actually appear in today's crates (keeps the payload small).
+  var needed = {};
+  rows.forEach(function (rw) { var s = String(rw.sku_id || '').trim(); if (s) needed[s] = 1; });
+  var skus = buildSkuList(master, needed);
   var res = post('/api/ingest', { skus: skus, rows: rows, reset: !!reset });
   toast('Sync out' + (reset ? ' (fresh reset)' : '') + ': pushed ' + rows.length + ' rows → ' + (res.added != null ? res.added + ' crates' : JSON.stringify(res)));
   return { rows: rows.length, res: res };
@@ -178,7 +181,10 @@ function readAdmin(master) {
   }
   return out;
 }
-function buildSkuList(master) {
+// Per SKU: prefer an APPROVED ean; if a SKU has no approved ean, fall back to a PENDING one so it
+// still shows a name + EAN in the app (the EAN<>SKU sheet is a snapshot and approvals lag behind
+// live SKUs). One entry per sku_id. `needed` (optional) limits output to the SKUs in today's crates.
+function buildSkuList(master, needed) {
   var sh = findSheetByCols(master, SKU_TAB, [['sku_id', 'sku id', 'sku'], ['ean', 'barcode', 'sku_name', 'name', 'item name', 'product']]);
   if (!sh) return [];
   var v = sh.getDataRange().getValues(); var h = cols(v[0]);
@@ -186,13 +192,26 @@ function buildSkuList(master) {
   var cEan = pick(h, ['ean', 'barcode', 'ean code']);
   var cName = pick(h, ['sku_name', 'name', 'item name', 'product', 'description']);
   var cStatus = pick(h, ['status', 'ean status', 'approval status', 'approval']);
-  var out = [];
+  var appr = {}, pend = {};
   for (var i = 1; i < v.length && cId >= 0; i++) {
     var id = String(v[i][cId] || '').trim(); if (!id) continue;
-    // Only APPROVED EANs are usable in the app. If a status column exists, keep only APPROVED rows.
-    if (cStatus >= 0 && String(v[i][cStatus] || '').trim().toUpperCase() !== 'APPROVED') continue;
-    out.push({ sku_id: id, ean: cEan >= 0 ? String(v[i][cEan] || '').trim() : '', sku_name: cName >= 0 ? String(v[i][cName] || '').trim() : '' });
+    if (needed && !needed[id]) continue;
+    var ean = cEan >= 0 ? String(v[i][cEan] || '').trim() : '';
+    var name = cName >= 0 ? String(v[i][cName] || '').trim() : '';
+    var st = cStatus >= 0 ? String(v[i][cStatus] || '').trim().toUpperCase() : 'APPROVED';
+    var bucket = (st === 'APPROVED') ? appr : pend;
+    // keep the first row for this sku, but upgrade to one that actually has an ean if the first didn't
+    if (!bucket[id]) bucket[id] = { sku_id: id, ean: ean, sku_name: name };
+    else { if (!bucket[id].ean && ean) bucket[id].ean = ean; if (!bucket[id].sku_name && name) bucket[id].sku_name = name; }
   }
+  var out = [];
+  for (var a in appr) {
+    var e = appr[a];
+    // approved row exists but has no ean -> borrow the ean (and any missing name) from a pending row
+    if (!e.ean && pend[a] && pend[a].ean) e = { sku_id: a, ean: pend[a].ean, sku_name: e.sku_name || pend[a].sku_name };
+    out.push(e);
+  }
+  for (var p in pend) if (!appr[p]) out.push(pend[p]);   // pending fallback: only SKUs with no approved row at all
   return out;
 }
 function buildPpShopMap(master) {
