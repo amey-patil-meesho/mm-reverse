@@ -30,7 +30,9 @@ export function isEligible(createdDate) {
 }
 export function clearanceDeadline(createdDate) {
   if (!createdDate) return null;
-  const d = new Date(createdDate + 'T00:00:00'); d.setDate(d.getDate() + CLEARANCE_DAYS);
+  const d = new Date(createdDate + 'T00:00:00');
+  if (isNaN(d.getTime())) return null;   // malformed date (e.g. a Date-cell string from the sheet) → never throw
+  d.setDate(d.getDate() + CLEARANCE_DAYS);
   return d.toISOString().slice(0, 10);
 }
 

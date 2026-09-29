@@ -69,8 +69,8 @@ function syncOut(reset) {
         pc: cDest >= 0 ? String(row[cDest] || '').trim() : '',
         crate_id: crate, sku_id: cSku >= 0 ? String(row[cSku] || '').trim() : '',
         rto_qty: cRto >= 0 ? toInt(row[cRto]) : 0,
-        wh_date: cWh >= 0 ? String(row[cWh] || '') : date,
-        created: cCreat >= 0 ? String(row[cCreat] || '') : '',
+        wh_date: cWh >= 0 ? dstr(row[cWh]) : date,
+        created: cCreat >= 0 ? dstr(row[cCreat]) : '',
       });
     }
   });
@@ -229,6 +229,12 @@ function findSheetByCols(ss, preferredName, groups) {
     if (ok) return sheets[s];
   }
   return null;
+}
+// Sheets returns a date-type cell as a Date object (whatever its display format), which serialises
+// as "Mon Sep 21 2026 …". Normalise any date cell to a clean yyyy-MM-dd string in the sheet's TZ.
+function dstr(v) {
+  if (v instanceof Date) return Utilities.formatDate(v, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  return String(v == null ? '' : v).trim();
 }
 function digits10(v) { var d = String(v == null ? '' : v).replace(/\D/g, ''); return d.length >= 10 ? d.slice(-10) : d; }
 function toInt(v) { var n = parseInt(String(v).replace(/[^\d-]/g, ''), 10); return isNaN(n) ? 0 : n; }
