@@ -491,34 +491,84 @@ export function adminRiders() {
   ).all();
 }
 
-// SKU-level scan export for the Apps Script bridge → the "Scan Data <date>" tab.
-// One row per scanned RTO crate × sku (expected vs actually scanned), plus one row per empty crate.
-export const EXPORT_COLS = ['rider_phone', 'rider_name', 'pp_code', 'shop_name', 'crate_number', 'sku_id', 'sku_name', 'expected_rto', 'units_scanned', 'status', 'scanned_at_pp', 'reached_at_pp', 'left_pp'];
-export function scanExportRows() {
+// Scan-data export for the Apps Script bridge. Two per-rider tabs (see the experiment template):
+//   Format 1 = line-item, one row per scanned crate × SKU (values repeat across a crate's SKU rows).
+//   Format 2 = one rollup row per assigned PP (the source for the % PPs / % crates / units metrics).
+// A "scanned" crate is one that moved past CREATED and wasn't marked UNAVAILABLE.
+const SCANNED_CRATE = `status NOT IN ('CREATED','CLEARED','UNAVAILABLE')`;
+
+export const SCAN_FORMATS = [
+  { name: 'Scan Data Format 1', group_by: 'rider number', key: ['crate_id', 'sku_id'],
+    cols: ['rider name', 'rider number', 'pp code', 'shop name', 'crate_id', 'crate type (Empty/RTO)', 'sku_id', 'sku_name', 'expected rto_qty', 'units_scanned', 'reached_at_pp_ts', 'crate_scan_ts', 'sku_first_scan_ts', 'sku_last_scan_ts', 'left_pp_ts'] },
+  { name: 'Scan Data Format 2', group_by: 'rider number', key: ['pp code'],
+    cols: ['rider name', 'rider number', 'pp code', 'rto_crates_qty', 'empty_crates_qty', 'rto_crates_scanned', 'empty_crates_scanned', 'expected_rto_qty', 'units_scanned', 'first_sku_scan_ts', 'last_sku_scan_ts', 'first_crate_scan_ts', 'last_crate_scan_ts', 'reached_at_pp_ts', 'left_pp_ts'] },
+];
+
+function scanFormat1Rows() {
   const crates = db.prepare(
-    `SELECT c.*, p.mm_rider, p.mm_rider_phone, p.pp_cluster, p.reached_at, p.left_at FROM crates c JOIN pickup_points p ON p.pp_id=c.pp_id
-      WHERE c.status NOT IN ('CREATED','CLEARED')
-      ORDER BY p.mm_rider_phone, c.crate_id`
+    `SELECT c.*, p.mm_rider, p.mm_rider_phone, p.pp_cluster, p.reached_at, p.left_at
+       FROM crates c JOIN pickup_points p ON p.pp_id=c.pp_id
+      WHERE c.${SCANNED_CRATE} ORDER BY p.mm_rider_phone, c.crate_id`
   ).all();
   const rows = [];
   for (const c of crates) {
-    const at = c.closed_at || c.dispatched_at || c.opened_at || c.received_at_pc_at || '';
-    const ppTimes = { reached_at_pp: c.reached_at || '', left_pp: c.left_at || '' };
-    const skus = db.prepare('SELECT sku_id, COUNT(*) n FROM scan_events WHERE crate_id=? GROUP BY sku_id ORDER BY sku_id').all(c.crate_id);
+    const base = {
+      'rider name': c.mm_rider, 'rider number': c.mm_rider_phone, 'pp code': c.pp_code, 'shop name': c.pp_cluster,
+      'crate_id': c.crate_id, 'crate type (Empty/RTO)': c.type,
+      'reached_at_pp_ts': c.reached_at || '', 'crate_scan_ts': c.opened_at || c.closed_at || '', 'left_pp_ts': c.left_at || '',
+    };
+    const skus = db.prepare(
+      `SELECT sku_id, COUNT(*) n, MIN(scanned_at) first_ts, MAX(scanned_at) last_ts
+         FROM scan_events WHERE crate_id=? GROUP BY sku_id ORDER BY sku_id`
+    ).all(c.crate_id);
     if (skus.length) {
       for (const s of skus) {
         const d = db.prepare('SELECT expected_qty, sku_name FROM pp_rto_demand WHERE pp_id=? AND sku_id=?').get(c.pp_id, s.sku_id) || {};
-        rows.push({ rider_phone: c.mm_rider_phone, rider_name: c.mm_rider, pp_code: c.pp_code, shop_name: c.pp_cluster,
-          crate_number: c.crate_id, sku_id: s.sku_id, sku_name: d.sku_name || '', expected_rto: d.expected_qty ?? '',
-          units_scanned: s.n, status: c.status, scanned_at_pp: at, ...ppTimes });
+        const nm = d.sku_name || (db.prepare('SELECT sku_name FROM sku_catalog WHERE sku_id=?').get(s.sku_id) || {}).sku_name || '';
+        rows.push({ ...base, 'sku_id': s.sku_id, 'sku_name': nm, 'expected rto_qty': d.expected_qty ?? '',
+          'units_scanned': s.n, 'sku_first_scan_ts': s.first_ts || '', 'sku_last_scan_ts': s.last_ts || '' });
       }
     } else {
-      rows.push({ rider_phone: c.mm_rider_phone, rider_name: c.mm_rider, pp_code: c.pp_code, shop_name: c.pp_cluster,
-        crate_number: c.crate_id, sku_id: '', sku_name: '', expected_rto: 0, units_scanned: 0,
-        status: c.type === 'EMPTY' ? 'EMPTY' : c.status, scanned_at_pp: at, ...ppTimes });
+      rows.push({ ...base, 'sku_id': '', 'sku_name': '', 'expected rto_qty': c.type === 'EMPTY' ? '' : 0,
+        'units_scanned': 0, 'sku_first_scan_ts': '', 'sku_last_scan_ts': '' });
     }
   }
   return rows;
+}
+
+function scanFormat2Rows() {
+  const pps = db.prepare('SELECT * FROM pickup_points ORDER BY mm_rider_phone, pp_code').all();
+  return pps.map((p) => {
+    const cr = db.prepare(
+      `SELECT
+         SUM(CASE WHEN type='RTO' THEN 1 ELSE 0 END) rto_qty,
+         SUM(CASE WHEN type='EMPTY' THEN 1 ELSE 0 END) empty_qty,
+         SUM(CASE WHEN type='RTO' AND ${SCANNED_CRATE} THEN 1 ELSE 0 END) rto_scanned,
+         SUM(CASE WHEN type='EMPTY' AND ${SCANNED_CRATE} THEN 1 ELSE 0 END) empty_scanned,
+         MIN(CASE WHEN ${SCANNED_CRATE} THEN COALESCE(opened_at, closed_at) END) first_crate_ts,
+         MAX(CASE WHEN ${SCANNED_CRATE} THEN COALESCE(opened_at, closed_at) END) last_crate_ts
+       FROM crates WHERE pp_id=?`
+    ).get(p.pp_id) || {};
+    const ex = db.prepare('SELECT COALESCE(SUM(expected_qty),0) e FROM pp_rto_demand WHERE pp_id=?').get(p.pp_id).e;
+    const su = db.prepare('SELECT COUNT(*) n, MIN(scanned_at) f, MAX(scanned_at) l FROM scan_events WHERE pp_id=?').get(p.pp_id);
+    return {
+      'rider name': p.mm_rider, 'rider number': p.mm_rider_phone, 'pp code': p.pp_code,
+      'rto_crates_qty': cr.rto_qty || 0, 'empty_crates_qty': cr.empty_qty || 0,
+      'rto_crates_scanned': cr.rto_scanned || 0, 'empty_crates_scanned': cr.empty_scanned || 0,
+      'expected_rto_qty': ex, 'units_scanned': su.n || 0,
+      'first_sku_scan_ts': su.f || '', 'last_sku_scan_ts': su.l || '',
+      'first_crate_scan_ts': cr.first_crate_ts || '', 'last_crate_scan_ts': cr.last_crate_ts || '',
+      'reached_at_pp_ts': p.reached_at || '', 'left_pp_ts': p.left_at || '',
+    };
+  });
+}
+
+// Payload the bridge pulls: each format carries its own header, upsert key and grouping field.
+export function scanExportFormats() {
+  return { formats: [
+    { ...SCAN_FORMATS[0], rows: scanFormat1Rows() },
+    { ...SCAN_FORMATS[1], rows: scanFormat2Rows() },
+  ] };
 }
 
 // ---- ground-ops supervisor board: live per-rider progress + still-open PPs (read-only) ----

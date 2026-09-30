@@ -86,49 +86,52 @@ function syncOut(reset) {
 // ---- SYNC IN: pull scan results → write a "Scan Data <date>" tab per rider ----
 function syncIn() {
   var out = fetchJson('/api/scan-export');
-  var cols = out.cols || [];
-  var rows = out.rows || [];
+  var formats = out.formats || [];
   var dir = readAdmin(SpreadsheetApp.openById(MASTER_ID));
   var byPhone = {}; dir.forEach(function (d) { byPhone[d.phone] = d; });
-  // group export rows by rider phone
-  var groups = {};
-  rows.forEach(function (r) { (groups[r.rider_phone] = groups[r.rider_phone] || []).push(r); });
   var date = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd');
-  var ci = {}; cols.forEach(function (c, i) { ci[c] = i; });
-  var kc = ci['crate_number'], ks = ci['sku_id'];   // upsert key = crate × sku
-  var written = 0;
-  Object.keys(groups).forEach(function (phone) {
-    var rd = byPhone[phone]; if (!rd || !rd.sheetId) return;
-    var rss; try { rss = SpreadsheetApp.openById(rd.sheetId); } catch (_) { return; }
-    var name = SCAN_TAB_PREFIX + date;
-    var tab = rss.getSheetByName(name);
-    // ACCUMULATE (never clear): read existing rows, then upsert each scan by crate×sku. This way
-    // a free-tier spin-down that wipes the app can never erase scans already written to the sheet.
-    var existing = [];
-    if (!tab) { tab = rss.insertSheet(name); tab.appendRow(cols); tab.setFrozenRows(1); }
-    else {
-      var vv = tab.getDataRange().getValues();
-      var hdr = vv.length ? vv[0] : [];
-      // If the export gained/renamed columns, refresh the header so widths line up.
-      var same = hdr.length === cols.length; for (var hi = 0; same && hi < cols.length; hi++) if (hdr[hi] !== cols[hi]) same = false;
-      if (!same) { tab.getRange(1, 1, 1, cols.length).setValues([cols]); tab.setFrozenRows(1); }
-      if (vv.length > 1) existing = vv.slice(1);
-      // Normalise every existing row to the current column count (pad new cols, trim removed ones).
-      existing = existing.map(function (r) { var a = r.slice(0, cols.length); while (a.length < cols.length) a.push(''); return a; });
-    }
-    var map = {};
-    existing.forEach(function (r, idx) { map[String(r[kc]) + '|' + String(r[ks])] = idx; });
-    groups[phone].forEach(function (r) {
-      var arr = cols.map(function (c) { return r[c] != null ? r[c] : ''; });
-      var key = String(r.crate_number) + '|' + String(r.sku_id);
-      if (map[key] != null) existing[map[key]] = arr;                 // update in place
-      else { existing.push(arr); map[key] = existing.length - 1; }    // append new
-      written++;
+  var total = 0;
+  // Each format is its own per-rider tab ("<name> <date>") with its own header, upsert key and
+  // grouping field. ACCUMULATE (never clear): a spin-down that wipes the app can't erase written rows.
+  formats.forEach(function (fmt) {
+    var cols = fmt.cols || [];
+    var keyCols = fmt.key || [];
+    var gb = fmt.group_by || cols[1];
+    var groups = {};
+    (fmt.rows || []).forEach(function (r) {
+      var ph = String(r[gb] == null ? '' : r[gb]).replace(/\D/g, '').slice(-10);
+      if (ph) (groups[ph] = groups[ph] || []).push(r);
     });
-    if (existing.length) tab.getRange(2, 1, existing.length, cols.length).setValues(existing);
+    Object.keys(groups).forEach(function (phone) {
+      var rd = byPhone[phone]; if (!rd || !rd.sheetId) return;
+      var rss; try { rss = SpreadsheetApp.openById(rd.sheetId); } catch (_) { return; }
+      var name = fmt.name + ' ' + date;
+      var tab = rss.getSheetByName(name);
+      var existing = [];
+      if (!tab) { tab = rss.insertSheet(name); tab.appendRow(cols); tab.setFrozenRows(1); }
+      else {
+        var vv = tab.getDataRange().getValues();
+        var hdr = vv.length ? vv[0] : [];
+        var same = hdr.length === cols.length; for (var hi = 0; same && hi < cols.length; hi++) if (hdr[hi] !== cols[hi]) same = false;
+        if (!same) { tab.getRange(1, 1, 1, cols.length).setValues([cols]); tab.setFrozenRows(1); }
+        if (vv.length > 1) existing = vv.slice(1);
+        existing = existing.map(function (r) { var a = r.slice(0, cols.length); while (a.length < cols.length) a.push(''); return a; });
+      }
+      var ci = {}; cols.forEach(function (c, i) { ci[c] = i; });
+      var map = {};
+      existing.forEach(function (r, idx) { map[keyCols.map(function (c) { return String(r[ci[c]]); }).join('|')] = idx; });
+      groups[phone].forEach(function (r) {
+        var arr = cols.map(function (c) { return r[c] != null ? r[c] : ''; });
+        var key = keyCols.map(function (c) { return String(r[c] != null ? r[c] : ''); }).join('|');
+        if (map[key] != null) existing[map[key]] = arr;
+        else { existing.push(arr); map[key] = existing.length - 1; }
+        total++;
+      });
+      if (existing.length) tab.getRange(2, 1, existing.length, cols.length).setValues(existing);
+    });
   });
-  toast('Sync in: merged ' + written + ' scan rows into Scan Data ' + date);
-  return { written: written };
+  toast('Sync in: merged ' + total + ' rows into ' + formats.map(function (f) { return f.name; }).join(' + ') + ' (' + date + ')');
+  return { written: total };
 }
 
 // ---- auto-sync trigger ------------------------------------------------------
