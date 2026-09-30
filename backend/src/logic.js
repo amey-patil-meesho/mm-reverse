@@ -309,20 +309,15 @@ export function closeAllRto(ppId, opts = {}) {
   ).all(ppId);
 
   if (pendingSkus.length > 0 && !opts.confirmMissing) {
-    // If a crate was closed on hitting capacity, the rest must go into a NEW crate — surface that so
-    // the UI can offer "Scan other RTO Crate" rather than "Go back to SKU Scanning".
+    // Typically this fires when a crate filled at capacity and the rider pressed "Close all RTO
+    // crates" instead of opening another crate for the rest. If a crate hit capacity, surface that
+    // so the UI offers "Scan another RTO Crate" rather than "Go back to SKU Scanning".
     const crateFull = !!db.prepare(
       `SELECT 1 FROM crates WHERE pp_id=? AND type='RTO' AND closed_reason='CAPACITY' LIMIT 1`
     ).get(ppId);
-    return { needs_confirm: 'missing', pending_skus: pendingSkus, crate_full: crateFull };
+    const pendingUnits = pendingSkus.reduce((a, s) => a + s.missing, 0);   // rto_qty − already scanned
+    return { needs_confirm: 'missing', pending_skus: pendingSkus, pending_units: pendingUnits, crate_full: crateFull };
   }
-
-  // RTO crates never scanned (still available, not stale) — the rider physically didn't pick them.
-  const pendingCrates = db.prepare(
-    `SELECT crate_id, cumulative_rto, created_date FROM crates WHERE pp_id=? AND type='RTO' AND status='CREATED' ORDER BY crate_id`
-  ).all(ppId).filter((c) => isEligible(c.created_date));
-  if (pendingCrates.length > 0 && !opts.confirmUnavailable)
-    return { needs_confirm: 'unavailable', pending_crates: pendingCrates.map((c) => ({ crate_id: c.crate_id, cumulative_rto: c.cumulative_rto })) };
 
   tx(() => {
     // Close every still-open SKU: a shortfall → SHORT_CLOSED + missing_qty, an extra → CLOSED.
@@ -330,9 +325,6 @@ export function closeAllRto(ppId, opts = {}) {
       const missing = s.expected_qty - s.scanned_qty;
       db.prepare(`UPDATE pp_rto_demand SET status=?, missing_qty=? WHERE id=?`).run(missing > 0 ? 'SHORT_CLOSED' : 'CLOSED', Math.max(0, missing), s.id);
     }
-    // Unscanned RTO crates → unavailable at the PP (counts against "% of crates scanned").
-    for (const c of pendingCrates)
-      db.prepare(`UPDATE crates SET status='UNAVAILABLE', closed_reason='UNAVAILABLE_AT_PP', closed_at=? WHERE crate_id=?`).run(nowIso(), c.crate_id);
     db.prepare(`UPDATE pickup_points SET stage='RTO_CLOSED' WHERE pp_id=?`).run(ppId);
   });
   return ppView(ppId);
@@ -352,15 +344,18 @@ export function scanEmptyCrate(ppId, crateId) {
   return ppView(ppId);
 }
 
+// Closing the empty phase mirrors RTO: crates still shown in the empty list but not scanned must be
+// intentionally marked unavailable at the PP (they count against "% of crates scanned"), never
+// silently dropped. Unconfirmed, returns needs_confirm:'unavailable' with the pending crate list.
 export function closeAllEmpty(ppId, opts = {}) {
   const pp = getPP(ppId); if (!pp) notFound('Pickup point not found');
   if (pp.stage !== 'RTO_CLOSED') bad('Empty crates are not open for this PP', 'BAD_STAGE');
-  // Empty crates never scanned (still available, not stale) → must be intentionally marked unavailable.
+  // Empty-returnable crates (empty crates + unpacked RTO crates) still CREATED = not scanned.
   const pendingCrates = db.prepare(
-    `SELECT crate_id, created_date FROM crates WHERE pp_id=? AND type='EMPTY' AND status='CREATED' ORDER BY crate_id`
-  ).all(ppId).filter((c) => isEligible(c.created_date));
+    `SELECT crate_id, type, created_date FROM crates WHERE pp_id=? AND status='CREATED' ORDER BY crate_id`
+  ).all(ppId).filter((c) => isEligible(c.created_date) && (c.type === 'EMPTY' || crateLoad(c.crate_id) === 0));
   if (pendingCrates.length > 0 && !opts.confirmUnavailable)
-    return { needs_confirm: 'unavailable', pending_crates: pendingCrates.map((c) => ({ crate_id: c.crate_id })) };
+    return { needs_confirm: 'unavailable', pending_crates: pendingCrates.map((c) => ({ crate_id: c.crate_id, type: c.type })) };
   tx(() => {
     for (const c of pendingCrates)
       db.prepare(`UPDATE crates SET status='UNAVAILABLE', closed_reason='UNAVAILABLE_AT_PP', closed_at=? WHERE crate_id=?`).run(nowIso(), c.crate_id);
@@ -494,8 +489,21 @@ export function adminRiders() {
 // Scan-data export for the Apps Script bridge. Two per-rider tabs (see the experiment template):
 //   Format 1 = line-item, one row per scanned crate × SKU (values repeat across a crate's SKU rows).
 //   Format 2 = one rollup row per assigned PP (the source for the % PPs / % crates / units metrics).
-// A "scanned" crate is one that moved past CREATED and wasn't marked UNAVAILABLE.
+// A "scanned" crate moved past CREATED (opened/filled, or returned as an empty) and wasn't marked
+// unavailable — unscanned (CREATED) and UNAVAILABLE crates both count against "% of crates scanned".
 const SCANNED_CRATE = `status NOT IN ('CREATED','CLEARED','UNAVAILABLE')`;
+
+// Timestamps are stored as UTC ISO; render them in IST (Asia/Kolkata) as 'yyyy-MM-dd HH:mm:ss' for the sheet.
+const IST_FMT = new Intl.DateTimeFormat('en-GB', {
+  timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit',
+  hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+});
+function ist(v) {
+  if (!v) return '';
+  const d = new Date(v); if (isNaN(d.getTime())) return String(v);
+  const p = {}; for (const x of IST_FMT.formatToParts(d)) p[x.type] = x.value;
+  return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}:${p.second}`;
+}
 
 export const SCAN_FORMATS = [
   { name: 'Scan Data Format 1', group_by: 'rider number', key: ['crate_id', 'sku_id'],
@@ -515,7 +523,7 @@ function scanFormat1Rows() {
     const base = {
       'rider name': c.mm_rider, 'rider number': c.mm_rider_phone, 'pp code': c.pp_code, 'shop name': c.pp_cluster,
       'crate_id': c.crate_id, 'crate type (Empty/RTO)': c.type,
-      'reached_at_pp_ts': c.reached_at || '', 'crate_scan_ts': c.opened_at || c.closed_at || '', 'left_pp_ts': c.left_at || '',
+      'reached_at_pp_ts': ist(c.reached_at), 'crate_scan_ts': ist(c.opened_at || c.closed_at), 'left_pp_ts': ist(c.left_at),
     };
     const skus = db.prepare(
       `SELECT sku_id, COUNT(*) n, MIN(scanned_at) first_ts, MAX(scanned_at) last_ts
@@ -526,7 +534,7 @@ function scanFormat1Rows() {
         const d = db.prepare('SELECT expected_qty, sku_name FROM pp_rto_demand WHERE pp_id=? AND sku_id=?').get(c.pp_id, s.sku_id) || {};
         const nm = d.sku_name || (db.prepare('SELECT sku_name FROM sku_catalog WHERE sku_id=?').get(s.sku_id) || {}).sku_name || '';
         rows.push({ ...base, 'sku_id': s.sku_id, 'sku_name': nm, 'expected rto_qty': d.expected_qty ?? '',
-          'units_scanned': s.n, 'sku_first_scan_ts': s.first_ts || '', 'sku_last_scan_ts': s.last_ts || '' });
+          'units_scanned': s.n, 'sku_first_scan_ts': ist(s.first_ts), 'sku_last_scan_ts': ist(s.last_ts) });
       }
     } else {
       rows.push({ ...base, 'sku_id': '', 'sku_name': '', 'expected rto_qty': c.type === 'EMPTY' ? '' : 0,
@@ -556,9 +564,9 @@ function scanFormat2Rows() {
       'rto_crates_qty': cr.rto_qty || 0, 'empty_crates_qty': cr.empty_qty || 0,
       'rto_crates_scanned': cr.rto_scanned || 0, 'empty_crates_scanned': cr.empty_scanned || 0,
       'expected_rto_qty': ex, 'units_scanned': su.n || 0,
-      'first_sku_scan_ts': su.f || '', 'last_sku_scan_ts': su.l || '',
-      'first_crate_scan_ts': cr.first_crate_ts || '', 'last_crate_scan_ts': cr.last_crate_ts || '',
-      'reached_at_pp_ts': p.reached_at || '', 'left_pp_ts': p.left_at || '',
+      'first_sku_scan_ts': ist(su.f), 'last_sku_scan_ts': ist(su.l),
+      'first_crate_scan_ts': ist(cr.first_crate_ts), 'last_crate_scan_ts': ist(cr.last_crate_ts),
+      'reached_at_pp_ts': ist(p.reached_at), 'left_pp_ts': ist(p.left_at),
     };
   });
 }
