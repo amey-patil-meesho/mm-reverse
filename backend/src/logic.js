@@ -294,17 +294,37 @@ export function closeCrate(crateId) {
   return ppView(crate.pp_id);
 }
 
-export function closeAllRto(ppId) {
+// Closing RTO is NOT allowed to silently drop shortfalls: if any expected unit is still unscanned,
+// the rider must explicitly confirm marking those SKUs missing at the PP first. Unconfirmed, we
+// return { needs_confirm:'missing', ... } so the UI can pop the question instead of closing.
+export function closeAllRto(ppId, opts = {}) {
   const pp = getPP(ppId); if (!pp) notFound('Pickup point not found');
   if (pp.stage !== 'REACHED') bad('RTO crates are not open for this PP', 'BAD_STAGE');
   if (getActiveRtoCrate(ppId)) bad('Finish the open crate before closing all RTO crates', 'CRATE_OPEN');
-  // any RTO units still not packed are recorded as missing
-  const openSkus = db.prepare(`SELECT * FROM pp_rto_demand WHERE pp_id=? AND status='OPEN'`).all(ppId);
-  for (const s of openSkus) {
-    const missing = s.expected_qty - s.scanned_qty;
-    db.prepare(`UPDATE pp_rto_demand SET status=?, missing_qty=? WHERE id=?`).run(missing > 0 ? 'SHORT_CLOSED' : 'CLOSED', Math.max(0, missing), s.id);
+
+  // Expected RTO units still not scanned (real shortfalls only — extras have expected_qty 0).
+  const pendingSkus = db.prepare(
+    `SELECT sku_id, sku_name, ean, expected_qty, scanned_qty, (expected_qty - scanned_qty) missing
+       FROM pp_rto_demand WHERE pp_id=? AND status='OPEN' AND expected_qty > scanned_qty ORDER BY sku_name`
+  ).all(ppId);
+
+  if (pendingSkus.length > 0 && !opts.confirmMissing) {
+    // If a crate was closed on hitting capacity, the rest must go into a NEW crate — surface that so
+    // the UI can offer "Scan other RTO Crate" rather than "Go back to SKU Scanning".
+    const crateFull = !!db.prepare(
+      `SELECT 1 FROM crates WHERE pp_id=? AND type='RTO' AND closed_reason='CAPACITY' LIMIT 1`
+    ).get(ppId);
+    return { needs_confirm: 'missing', pending_skus: pendingSkus, crate_full: crateFull };
   }
-  db.prepare(`UPDATE pickup_points SET stage='RTO_CLOSED' WHERE pp_id=?`).run(ppId);
+
+  tx(() => {
+    // Close every still-open SKU: a shortfall → SHORT_CLOSED + missing_qty, an extra → CLOSED.
+    for (const s of db.prepare(`SELECT * FROM pp_rto_demand WHERE pp_id=? AND status='OPEN'`).all(ppId)) {
+      const missing = s.expected_qty - s.scanned_qty;
+      db.prepare(`UPDATE pp_rto_demand SET status=?, missing_qty=? WHERE id=?`).run(missing > 0 ? 'SHORT_CLOSED' : 'CLOSED', Math.max(0, missing), s.id);
+    }
+    db.prepare(`UPDATE pickup_points SET stage='RTO_CLOSED' WHERE pp_id=?`).run(ppId);
+  });
   return ppView(ppId);
 }
 

@@ -24,6 +24,7 @@ export default function RiderFlow() {
   const [msg, setMsg] = useState(null);
   const [fx, setFx] = useState(null);       // last scan result on the crate screen { kind, message }
   const [modal, setModal] = useState(null);
+  const [confirm, setConfirm] = useState(null);   // pre-close confirmation (mark missing / unavailable)
   const [searchQ, setSearchQ] = useState('');   // "can't scan?" find-by-name/EAN
   const [results, setResults] = useState([]);
 
@@ -52,7 +53,20 @@ export default function RiderFlow() {
   const doAction = guard(async (key) => {
     const ppId = pv.pp.pp_id;
     if (key === 'reach') return setPv(await api.reach(ppId));
-    if (key === 'close_all_rto') { setPv(await api.closeRto(ppId)); return flash('ok', 'All RTO crates closed'); }
+    if (key === 'close_all_rto') {
+      const res = await api.closeRto(ppId);
+      if (res.needs_confirm === 'missing') {
+        return setConfirm({
+          intro: 'These SKUs are pending to be scanned. Would you like to mark them missing at the PP?',
+          items: res.pending_skus.map((s) => `${s.sku_name || s.sku_id} — ${s.missing} of ${s.expected_qty} not scanned`),
+          yesLabel: 'Yes, mark them Missing at PP',
+          noLabel: res.crate_full ? 'Scan other RTO Crate' : 'Go back to SKU Scanning',
+          onYes: guard(async () => { const r2 = await api.closeRto(ppId, { confirmMissing: true }); setConfirm(null); setPv(r2); flash('ok', 'RTO closed — pending SKUs marked missing at PP'); }),
+          onNo: () => { setConfirm(null); if (res.crate_full) doAction('scan_rto_crate'); },
+        });
+      }
+      setPv(res); return flash('ok', 'All RTO crates closed');
+    }
     if (key === 'close_all_empty') { setPv(await api.closeEmpty(ppId)); return flash('ok', 'All empty crates closed'); }
     if (key === 'leave') { await api.leave(ppId); await refreshPPs(); setView('pps'); return flash('ok', `${pv.pp.pp_code} closed`); }
     if (key === 'scan_ean') { setFx(null); return setView('crate'); }
@@ -167,6 +181,16 @@ export default function RiderFlow() {
           </div>
         </div>
         {modal && <ScanCrateModal modal={modal} onClose={() => setModal(null)} />}
+        {confirm && (
+          <Modal title="Pending at this PP" onClose={confirm.onNo}
+            actions={<div className="stack">
+              <button className="btn primary" onClick={confirm.onYes}>{confirm.yesLabel}</button>
+              <button className="btn ghost" onClick={confirm.onNo}>{confirm.noLabel}</button>
+            </div>}>
+            <div style={{ marginBottom: 8 }}>{confirm.intro}</div>
+            <ul style={{ margin: 0, paddingLeft: 18 }}>{confirm.items.map((t, i) => <li key={i}>{t}</li>)}</ul>
+          </Modal>
+        )}
       </>
     );
   }
