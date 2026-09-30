@@ -91,9 +91,11 @@ export default function RiderFlow() {
           <div className="card">
             <div className="small muted" style={{ marginBottom: 6 }}>Riders</div>
             {roster.map((r) => (
-              <div key={r.phone} className="skuitem tap" style={{ cursor: 'pointer' }} onClick={() => { setPhone(r.phone); login(r.phone); }}>
+              <div key={r.phone} className="skuitem tap" style={{ cursor: 'pointer', opacity: r.done ? 0.55 : 1 }} onClick={() => { setPhone(r.phone); login(r.phone); }}>
                 <div><div style={{ fontWeight: 600 }}>{r.name}</div><div className="small muted mono">{r.phone}</div></div>
-                <span className="badge grey">{r.pps} PPs</span>
+                {r.done
+                  ? <span className="badge grey">✅ done</span>
+                  : <span className="badge grey">{r.pps} PPs</span>}
               </div>
             ))}
           </div>

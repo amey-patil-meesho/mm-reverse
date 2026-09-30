@@ -35,8 +35,13 @@ const normPhone = (p) => String(p ?? '').replace(/\D/g, '').slice(-10);
 
 // Placeholder roster for demo/testing until the real rider→number mapping is supplied.
 export function riderRoster() {
-  return db.prepare(`SELECT mm_rider name, mm_rider_phone phone, COUNT(*) pps
-    FROM pickup_points WHERE stage!='LEFT' GROUP BY mm_rider_phone ORDER BY pps DESC`).all();
+  // Every rider stays listed; a rider who has left all their PPs is flagged done (shown greyed).
+  return db.prepare(`SELECT mm_rider name, mm_rider_phone phone,
+      COUNT(*) total_pps,
+      COUNT(CASE WHEN stage!='LEFT' THEN 1 END) pps,
+      CASE WHEN COUNT(CASE WHEN stage!='LEFT' THEN 1 END)=0 THEN 1 ELSE 0 END done
+    FROM pickup_points GROUP BY mm_rider_phone
+    ORDER BY done ASC, pps DESC`).all();
 }
 
 export function loginByPhone(phone) {
