@@ -32,7 +32,7 @@ export const api = {
   skuSearch: (ppId, q) => req('GET', `/pps/${ppId}/sku-search?q=${encodeURIComponent(q)}`),
   closeSku: (ppId, skuId) => req('POST', `/pps/${ppId}/demand/${skuId}/close`),
   searchAdd: (crateId, skuId, query, rider) => req('POST', `/crates/${crateId}/skus/${skuId}/search-add`, { query, rider }),
-  closeCrate: (crateId) => req('POST', `/crates/${crateId}/close`),
+  closeCrate: (crateId, opts) => req('POST', `/crates/${crateId}/close`, opts || {}),
   pcRoster: () => req('GET', '/pc/roster'),
   pcLogin: (phone) => req('POST', '/pc/login', { phone }),
   pcInbound: (pc) => req('GET', `/pc/inbound?pc=${encodeURIComponent(pc)}`),

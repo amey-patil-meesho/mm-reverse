@@ -287,11 +287,34 @@ export function closeDemandSku(ppId, skuId) {
   return { ...ppView(ppId), event: { sku_id: skuId, missing_qty: Math.max(0, missing) } };
 }
 
-export function closeCrate(crateId) {
+// Closing an open (not-yet-full) crate while PP RTO units are still unscanned is the moment to
+// confirm: mark the shortfall missing at the PP, or open another crate for the rest. Unconfirmed,
+// returns needs_confirm:'missing' so the crate screen pops the question BEFORE the crate closes.
+//   opts.confirmMissing → close this crate AND mark the pending SKUs missing.
+//   opts.proceed        → close this crate WITHOUT marking (rider will scan another crate).
+export function closeCrate(crateId, opts = {}) {
   const crate = getCrate(crateId); if (!crate) notFound('Crate not found');
   if (crate.status !== 'OPEN') bad('Only an open crate can be closed', 'CRATE_NOT_OPEN');
-  db.prepare(`UPDATE crates SET status='CLOSED', closed_reason='MANUAL', closed_at=? WHERE crate_id=?`).run(nowIso(), crateId);
-  return ppView(crate.pp_id);
+  const ppId = crate.pp_id;
+  const atCapacity = crate.capacity && crateLoad(crateId) >= crate.capacity;
+  const pendingSkus = db.prepare(
+    `SELECT sku_id, sku_name, ean, expected_qty, scanned_qty, (expected_qty - scanned_qty) missing
+       FROM pp_rto_demand WHERE pp_id=? AND status='OPEN' AND expected_qty > scanned_qty ORDER BY sku_name`
+  ).all(ppId);
+  if (pendingSkus.length > 0 && !atCapacity && !opts.confirmMissing && !opts.proceed) {
+    const pendingUnits = pendingSkus.reduce((a, s) => a + s.missing, 0);
+    return { needs_confirm: 'missing', crate_id: crateId, pending_skus: pendingSkus, pending_units: pendingUnits, crate_full: false };
+  }
+  tx(() => {
+    if (opts.confirmMissing) {
+      for (const s of db.prepare(`SELECT * FROM pp_rto_demand WHERE pp_id=? AND status='OPEN'`).all(ppId)) {
+        const missing = s.expected_qty - s.scanned_qty;
+        db.prepare(`UPDATE pp_rto_demand SET status=?, missing_qty=? WHERE id=?`).run(missing > 0 ? 'SHORT_CLOSED' : 'CLOSED', Math.max(0, missing), s.id);
+      }
+    }
+    db.prepare(`UPDATE crates SET status='CLOSED', closed_reason='MANUAL', closed_at=? WHERE crate_id=?`).run(nowIso(), crateId);
+  });
+  return ppView(ppId);
 }
 
 // Closing RTO is NOT allowed to silently drop shortfalls: if any expected unit is still unscanned,

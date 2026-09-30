@@ -80,7 +80,7 @@ api.post('/crates/:crateId/scan-unit', wrap((req) => L.scanUnit(req.params.crate
 api.get('/pps/:ppId/sku-search', wrap((req) => ({ skus: L.skuSearch(Number(req.params.ppId), req.query.q) })));
 api.post('/crates/:crateId/skus/:skuId/search-add', wrap((req) => L.searchAddUnit(req.params.crateId, req.params.skuId, req.body.query, req.body.rider)));
 api.post('/pps/:ppId/demand/:skuId/close', wrap((req) => L.closeDemandSku(Number(req.params.ppId), req.params.skuId)));
-api.post('/crates/:crateId/close', wrap((req) => L.closeCrate(req.params.crateId)));
+api.post('/crates/:crateId/close', wrap((req) => L.closeCrate(req.params.crateId, { confirmMissing: !!req.body?.confirmMissing, proceed: !!req.body?.proceed })));
 
 // ---- PC receiver login (by contact number; scoped to that POC's PC) ----
 api.get('/pc/roster', wrap(() => ({ pocs: L.pcRoster() })));

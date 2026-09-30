@@ -104,6 +104,18 @@ export default function RiderFlow() {
     flash('ok', kind === 'rto' ? 'RTO crates closed' : 'Empty crates closed');
   };
 
+  // Shared confirmation modal (mark missing / mark unavailable), rendered on whichever screen it fires.
+  const confirmModal = confirm && (
+    <Modal title="Pending at this PP" onClose={confirm.onNo}
+      actions={<div className="stack">
+        <button className="btn primary" onClick={confirm.onYes}>{confirm.yesLabel}</button>
+        <button className="btn ghost" onClick={confirm.onNo}>{confirm.noLabel}</button>
+      </div>}>
+      <div style={{ marginBottom: 8 }}>{confirm.intro}</div>
+      <ul style={{ margin: 0, paddingLeft: 18 }}>{confirm.items.map((t, i) => <li key={i}>{t}</li>)}</ul>
+    </Modal>
+  );
+
   // ---------- screens ----------
   if (view === 'login') return (
     <>
@@ -199,16 +211,7 @@ export default function RiderFlow() {
           </div>
         </div>
         {modal && <ScanCrateModal modal={modal} onClose={() => setModal(null)} />}
-        {confirm && (
-          <Modal title="Pending at this PP" onClose={confirm.onNo}
-            actions={<div className="stack">
-              <button className="btn primary" onClick={confirm.onYes}>{confirm.yesLabel}</button>
-              <button className="btn ghost" onClick={confirm.onNo}>{confirm.noLabel}</button>
-            </div>}>
-            <div style={{ marginBottom: 8 }}>{confirm.intro}</div>
-            <ul style={{ margin: 0, paddingLeft: 18 }}>{confirm.items.map((t, i) => <li key={i}>{t}</li>)}</ul>
-          </Modal>
-        )}
+        {confirmModal}
       </>
     );
   }
@@ -231,7 +234,23 @@ export default function RiderFlow() {
         setFx({ kind, message: ev.message });
       } catch (e) { buzz('err'); setFx({ kind: 'err', message: e.message }); }
     };
-    const closeCrate = guard(async () => { const cid = crate.crate_id; setPv(await api.closeCrate(cid)); setView('pp'); flash('ok', `Crate ${cid} closed — ready for dispatch`); });
+    // Closing a not-full crate with PP units still pending pops the "mark missing / scan another" question first.
+    const closeCrate = guard(async (opts = {}) => {
+      const cid = crate.crate_id;
+      const res = await api.closeCrate(cid, opts);
+      if (res.needs_confirm === 'missing') {
+        const n = res.pending_units;
+        return setConfirm({
+          intro: `There ${n === 1 ? 'is' : 'are'} ${n} unit${n === 1 ? '' : 's'} still pending on this PP. Would you like to mark them missing at the PP?`,
+          items: res.pending_skus.map((s) => `${s.sku_name || s.sku_id} — ${s.missing} of ${s.expected_qty} not scanned`),
+          yesLabel: 'Mark them Missing at PP',
+          noLabel: 'Scan another RTO Crate',
+          onYes: guard(async () => { const r = await api.closeCrate(cid, { confirmMissing: true }); setConfirm(null); setPv(r); setFx(null); setView('pp'); flash('ok', 'Crate closed — pending SKUs marked missing at PP'); }),
+          onNo: guard(async () => { const r = await api.closeCrate(cid, { proceed: true }); setConfirm(null); setPv(r); setFx(null); setView('pp'); doAction('scan_rto_crate'); }),
+        });
+      }
+      setConfirm(null); setPv(res); setFx(null); setView('pp'); flash('ok', `Crate ${cid} closed — ready for dispatch`);
+    });
     const pickResult = (s) => { setSearchQ(''); setResults([]); scan(s.sku_id); };
 
     return (
@@ -302,7 +321,7 @@ export default function RiderFlow() {
             </div>
           )}
 
-          <button className="btn ghost" onClick={closeCrate}>Done — close this crate</button>
+          <button className="btn ghost" onClick={() => closeCrate()}>Done — close this crate</button>
         </div>
         {modal?.type === 'full' && (
           <Modal title="This crate is full" onClose={() => { setModal(null); setView('pp'); }}
@@ -310,6 +329,7 @@ export default function RiderFlow() {
             The crate is full and has been closed automatically. Scan a new RTO crate for the remaining units.
           </Modal>
         )}
+        {confirmModal}
       </>
     );
   }
