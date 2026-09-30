@@ -507,9 +507,9 @@ function ist(v) {
 
 export const SCAN_FORMATS = [
   { name: 'Scan Data Format 1', group_by: 'rider number', key: ['crate_id', 'sku_id'],
-    cols: ['rider name', 'rider number', 'pp code', 'shop name', 'crate_id', 'crate type (Empty/RTO)', 'sku_id', 'sku_name', 'expected rto_qty', 'units_scanned', 'reached_at_pp_ts', 'crate_scan_ts', 'sku_first_scan_ts', 'sku_last_scan_ts', 'left_pp_ts'] },
+    cols: ['rider name', 'rider number', 'pp code', 'shop name', 'crate_id', 'crate type (Empty/RTO)', 'sku_id', 'sku_name', 'expected rto_qty', 'units_scanned', 'marked_missing_qty', 'reached_at_pp_ts', 'crate_scan_ts', 'sku_first_scan_ts', 'sku_last_scan_ts', 'left_pp_ts'] },
   { name: 'Scan Data Format 2', group_by: 'rider number', key: ['pp code'],
-    cols: ['rider name', 'rider number', 'pp code', 'rto_crates_qty', 'empty_crates_qty', 'rto_crates_scanned', 'empty_crates_scanned', 'expected_rto_qty', 'units_scanned', 'first_sku_scan_ts', 'last_sku_scan_ts', 'first_crate_scan_ts', 'last_crate_scan_ts', 'reached_at_pp_ts', 'left_pp_ts'] },
+    cols: ['rider name', 'rider number', 'pp code', 'rto_crates_qty', 'empty_crates_qty', 'rto_crates_scanned', 'empty_crates_scanned', 'marked_unavailable_crates', 'expected_rto_qty', 'units_scanned', 'marked_missing_skus', 'first_sku_scan_ts', 'last_sku_scan_ts', 'first_crate_scan_ts', 'last_crate_scan_ts', 'reached_at_pp_ts', 'left_pp_ts'] },
 ];
 
 function scanFormat1Rows() {
@@ -533,12 +533,15 @@ function scanFormat1Rows() {
       for (const s of skus) {
         const d = db.prepare('SELECT expected_qty, sku_name FROM pp_rto_demand WHERE pp_id=? AND sku_id=?').get(c.pp_id, s.sku_id) || {};
         const nm = d.sku_name || (db.prepare('SELECT sku_name FROM sku_catalog WHERE sku_id=?').get(s.sku_id) || {}).sku_name || '';
-        rows.push({ ...base, 'sku_id': s.sku_id, 'sku_name': nm, 'expected rto_qty': d.expected_qty ?? '',
-          'units_scanned': s.n, 'sku_first_scan_ts': ist(s.first_ts), 'sku_last_scan_ts': ist(s.last_ts) });
+        const exp = d.expected_qty ?? '';
+        // per-row identity: expected_rto_qty = units_scanned + marked_missing_qty
+        const missing = typeof exp === 'number' ? Math.max(0, exp - s.n) : '';
+        rows.push({ ...base, 'sku_id': s.sku_id, 'sku_name': nm, 'expected rto_qty': exp,
+          'units_scanned': s.n, 'marked_missing_qty': missing, 'sku_first_scan_ts': ist(s.first_ts), 'sku_last_scan_ts': ist(s.last_ts) });
       }
     } else {
       rows.push({ ...base, 'sku_id': '', 'sku_name': '', 'expected rto_qty': c.type === 'EMPTY' ? '' : 0,
-        'units_scanned': 0, 'sku_first_scan_ts': '', 'sku_last_scan_ts': '' });
+        'units_scanned': 0, 'marked_missing_qty': c.type === 'EMPTY' ? '' : 0, 'sku_first_scan_ts': '', 'sku_last_scan_ts': '' });
     }
   }
   return rows;
@@ -553,17 +556,20 @@ function scanFormat2Rows() {
          SUM(CASE WHEN type='EMPTY' THEN 1 ELSE 0 END) empty_qty,
          SUM(CASE WHEN type='RTO' AND ${SCANNED_CRATE} THEN 1 ELSE 0 END) rto_scanned,
          SUM(CASE WHEN type='EMPTY' AND ${SCANNED_CRATE} THEN 1 ELSE 0 END) empty_scanned,
+         SUM(CASE WHEN status='UNAVAILABLE' THEN 1 ELSE 0 END) unavailable,
          MIN(CASE WHEN ${SCANNED_CRATE} THEN COALESCE(opened_at, closed_at) END) first_crate_ts,
          MAX(CASE WHEN ${SCANNED_CRATE} THEN COALESCE(opened_at, closed_at) END) last_crate_ts
        FROM crates WHERE pp_id=?`
     ).get(p.pp_id) || {};
     const ex = db.prepare('SELECT COALESCE(SUM(expected_qty),0) e FROM pp_rto_demand WHERE pp_id=?').get(p.pp_id).e;
+    const miss = db.prepare('SELECT COALESCE(SUM(missing_qty),0) m FROM pp_rto_demand WHERE pp_id=?').get(p.pp_id).m;
     const su = db.prepare('SELECT COUNT(*) n, MIN(scanned_at) f, MAX(scanned_at) l FROM scan_events WHERE pp_id=?').get(p.pp_id);
     return {
       'rider name': p.mm_rider, 'rider number': p.mm_rider_phone, 'pp code': p.pp_code,
       'rto_crates_qty': cr.rto_qty || 0, 'empty_crates_qty': cr.empty_qty || 0,
       'rto_crates_scanned': cr.rto_scanned || 0, 'empty_crates_scanned': cr.empty_scanned || 0,
-      'expected_rto_qty': ex, 'units_scanned': su.n || 0,
+      'marked_unavailable_crates': cr.unavailable || 0,
+      'expected_rto_qty': ex, 'units_scanned': su.n || 0, 'marked_missing_skus': miss,
       'first_sku_scan_ts': ist(su.f), 'last_sku_scan_ts': ist(su.l),
       'first_crate_scan_ts': ist(cr.first_crate_ts), 'last_crate_scan_ts': ist(cr.last_crate_ts),
       'reached_at_pp_ts': ist(p.reached_at), 'left_pp_ts': ist(p.left_at),
