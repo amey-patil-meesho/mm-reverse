@@ -24,5 +24,7 @@ services:
       # Secrets — set in the Render dashboard, not committed:
       - key: ADMIN_ACCESS_CODE   # admin login code (you chose AMEY)
         sync: false
+      - key: OPS_ACCESS_CODE     # read-only Ops board code for the ground supervisor (admin code also works)
+        sync: false
       - key: BRIDGE_TOKEN        # must match the Apps Script gateway TOKEN (only if you use the bridge)
         sync: false

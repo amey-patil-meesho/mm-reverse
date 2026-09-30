@@ -24,6 +24,15 @@ const requireAdmin = (req, res, next) => {
   next();
 };
 
+// Ops board: read-only live tracking for the ground supervisor. Its own code (OPS_ACCESS_CODE); the
+// admin code also works, so the board is usable before a separate ops code is set. No email needed.
+const OPS_CODE = process.env.OPS_ACCESS_CODE || '';
+const opsOk = (c) => c === ADMIN_CODE || (OPS_CODE && c === OPS_CODE);
+const requireOps = (req, res, next) => {
+  if (!opsOk(req.get('x-ops-code') || '')) return res.status(401).json({ error: 'Ops access required', code: 'OPS_REQUIRED' });
+  next();
+};
+
 // Shared token for the Apps Script bridge (sheet ⇄ app). Must match the TOKEN in the gateway script.
 const BRIDGE_TOKEN = process.env.BRIDGE_TOKEN || 'eeBcLyjyNomuc6EfH2WA99sqHc9K-JDO';
 const requireBridge = (req, res, next) => {
@@ -106,6 +115,13 @@ api.get('/pc/rider-scans.csv', requireAdmin, (req, res) => { try { sendCsv(res, 
 // ---- asset clearance ----
 api.get('/clearance', wrap(() => ({ crates: L.listClearance() })));
 api.post('/clearance/:crateId/clear', wrap((req) => L.clearCrate(req.params.crateId)));
+
+// ---- ops: read-only live board for the ground-ops supervisor (code only, no email) ----
+api.post('/ops/login', (req, res) => {
+  if (!opsOk(String(req.body?.code || ''))) return res.status(403).json({ error: 'Invalid access code', code: 'BAD_CODE' });
+  res.json({ ok: true });
+});
+api.get('/ops/board', requireOps, wrap(() => L.opsBoard()));
 
 // ---- admin: login (Meesho email + shared access code), then data ops / downloads ----
 api.post('/admin/login', (req, res) => {

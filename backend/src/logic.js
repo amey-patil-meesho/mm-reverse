@@ -448,31 +448,71 @@ export function adminRiders() {
 
 // SKU-level scan export for the Apps Script bridge → the "Scan Data <date>" tab.
 // One row per scanned RTO crate × sku (expected vs actually scanned), plus one row per empty crate.
-export const EXPORT_COLS = ['rider_phone', 'rider_name', 'pp_code', 'shop_name', 'crate_number', 'sku_id', 'sku_name', 'expected_rto', 'units_scanned', 'status', 'scanned_at_pp'];
+export const EXPORT_COLS = ['rider_phone', 'rider_name', 'pp_code', 'shop_name', 'crate_number', 'sku_id', 'sku_name', 'expected_rto', 'units_scanned', 'status', 'scanned_at_pp', 'reached_at_pp', 'left_pp'];
 export function scanExportRows() {
   const crates = db.prepare(
-    `SELECT c.*, p.mm_rider, p.mm_rider_phone, p.pp_cluster FROM crates c JOIN pickup_points p ON p.pp_id=c.pp_id
+    `SELECT c.*, p.mm_rider, p.mm_rider_phone, p.pp_cluster, p.reached_at, p.left_at FROM crates c JOIN pickup_points p ON p.pp_id=c.pp_id
       WHERE c.status NOT IN ('CREATED','CLEARED')
       ORDER BY p.mm_rider_phone, c.crate_id`
   ).all();
   const rows = [];
   for (const c of crates) {
     const at = c.closed_at || c.dispatched_at || c.opened_at || c.received_at_pc_at || '';
+    const ppTimes = { reached_at_pp: c.reached_at || '', left_pp: c.left_at || '' };
     const skus = db.prepare('SELECT sku_id, COUNT(*) n FROM scan_events WHERE crate_id=? GROUP BY sku_id ORDER BY sku_id').all(c.crate_id);
     if (skus.length) {
       for (const s of skus) {
         const d = db.prepare('SELECT expected_qty, sku_name FROM pp_rto_demand WHERE pp_id=? AND sku_id=?').get(c.pp_id, s.sku_id) || {};
         rows.push({ rider_phone: c.mm_rider_phone, rider_name: c.mm_rider, pp_code: c.pp_code, shop_name: c.pp_cluster,
           crate_number: c.crate_id, sku_id: s.sku_id, sku_name: d.sku_name || '', expected_rto: d.expected_qty ?? '',
-          units_scanned: s.n, status: c.status, scanned_at_pp: at });
+          units_scanned: s.n, status: c.status, scanned_at_pp: at, ...ppTimes });
       }
     } else {
       rows.push({ rider_phone: c.mm_rider_phone, rider_name: c.mm_rider, pp_code: c.pp_code, shop_name: c.pp_cluster,
         crate_number: c.crate_id, sku_id: '', sku_name: '', expected_rto: 0, units_scanned: 0,
-        status: c.type === 'EMPTY' ? 'EMPTY' : c.status, scanned_at_pp: at });
+        status: c.type === 'EMPTY' ? 'EMPTY' : c.status, scanned_at_pp: at, ...ppTimes });
     }
   }
   return rows;
+}
+
+// ---- ground-ops supervisor board: live per-rider progress + still-open PPs (read-only) ----
+export function opsBoard() {
+  const riders = db.prepare(
+    `SELECT p.mm_rider_phone phone, p.mm_rider name,
+       COUNT(DISTINCT p.pp_id) total_pps,
+       COUNT(DISTINCT CASE WHEN p.stage='LEFT' THEN p.pp_id END) pps_done,
+       COUNT(DISTINCT c.crate_id) total_crates,
+       COUNT(DISTINCT CASE WHEN c.status='CREATED' THEN c.crate_id END) pending_crates,
+       COUNT(DISTINCT CASE WHEN c.status='CREATED' AND c.type='RTO' THEN c.crate_id END) pending_rto_crates,
+       COUNT(DISTINCT CASE WHEN c.status NOT IN ('CREATED','CLEARED') THEN c.crate_id END) done_crates
+     FROM pickup_points p LEFT JOIN crates c ON c.pp_id=p.pp_id
+     GROUP BY p.mm_rider_phone, p.mm_rider ORDER BY p.mm_rider`
+  ).all();
+  // last scan activity per rider (to flag who's idle / stalled)
+  const last = {};
+  for (const r of db.prepare(
+    `SELECT p.mm_rider_phone phone, MAX(s.scanned_at) last_at
+       FROM scan_events s JOIN pickup_points p ON p.pp_id=s.pp_id GROUP BY p.mm_rider_phone`
+  ).all()) last[r.phone] = r.last_at;
+  // still-open PPs (not yet left) per rider, with their pending-crate counts — the nudge list
+  const ppRows = db.prepare(
+    `SELECT p.mm_rider_phone phone, p.pp_code, p.pp_cluster, p.stage,
+       COUNT(c.crate_id) total_crates,
+       SUM(CASE WHEN c.status='CREATED' THEN 1 ELSE 0 END) pending_crates
+     FROM pickup_points p LEFT JOIN crates c ON c.pp_id=p.pp_id
+     WHERE p.stage!='LEFT' GROUP BY p.pp_id ORDER BY p.pp_code`
+  ).all();
+  const openByPhone = {};
+  for (const pp of ppRows) (openByPhone[pp.phone] = openByPhone[pp.phone] || []).push({
+    pp_code: pp.pp_code, cluster: pp.pp_cluster, stage: pp.stage, total_crates: pp.total_crates, pending_crates: pp.pending_crates || 0,
+  });
+  const sum = (f) => riders.reduce((a, r) => a + f(r), 0);
+  return {
+    generated_at: nowIso(),
+    totals: { pending_pps: sum((r) => r.total_pps - r.pps_done), pending_crates: sum((r) => r.pending_crates), done_crates: sum((r) => r.done_crates) },
+    riders: riders.map((r) => ({ ...r, pending_pps: r.total_pps - r.pps_done, last_activity: last[r.phone] || null, open_pps: openByPhone[r.phone] || [] })),
+  };
 }
 
 // live counts for the admin panel
