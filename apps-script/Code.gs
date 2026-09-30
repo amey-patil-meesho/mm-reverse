@@ -190,7 +190,8 @@ function readAdmin(master) {
 function buildSkuList(master, needed) {
   // Source 1 — SKU <> PID <> EAN: the freshest sku_id -> ean mapping (highest priority for scanning).
   var newEan = {}, newName = {};
-  var sh1 = findSheetByCols(master, SKU_PID_TAB, [['sku_id', 'sku id', 'sku'], ['ean', 'barcode']]);
+  // Bind to the named tab only — no column fallback, so we can't accidentally grab EAN SKU Details.
+  var sh1 = master.getSheetByName(SKU_PID_TAB);
   if (sh1) {
     var v1 = sh1.getDataRange().getValues(); var h1 = cols(v1[0]);
     var i1 = pick(h1, ['sku_id', 'sku id', 'sku']);
