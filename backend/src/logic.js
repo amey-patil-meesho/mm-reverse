@@ -317,12 +317,22 @@ export function closeAllRto(ppId, opts = {}) {
     return { needs_confirm: 'missing', pending_skus: pendingSkus, crate_full: crateFull };
   }
 
+  // RTO crates never scanned (still available, not stale) — the rider physically didn't pick them.
+  const pendingCrates = db.prepare(
+    `SELECT crate_id, cumulative_rto, created_date FROM crates WHERE pp_id=? AND type='RTO' AND status='CREATED' ORDER BY crate_id`
+  ).all(ppId).filter((c) => isEligible(c.created_date));
+  if (pendingCrates.length > 0 && !opts.confirmUnavailable)
+    return { needs_confirm: 'unavailable', pending_crates: pendingCrates.map((c) => ({ crate_id: c.crate_id, cumulative_rto: c.cumulative_rto })) };
+
   tx(() => {
     // Close every still-open SKU: a shortfall → SHORT_CLOSED + missing_qty, an extra → CLOSED.
     for (const s of db.prepare(`SELECT * FROM pp_rto_demand WHERE pp_id=? AND status='OPEN'`).all(ppId)) {
       const missing = s.expected_qty - s.scanned_qty;
       db.prepare(`UPDATE pp_rto_demand SET status=?, missing_qty=? WHERE id=?`).run(missing > 0 ? 'SHORT_CLOSED' : 'CLOSED', Math.max(0, missing), s.id);
     }
+    // Unscanned RTO crates → unavailable at the PP (counts against "% of crates scanned").
+    for (const c of pendingCrates)
+      db.prepare(`UPDATE crates SET status='UNAVAILABLE', closed_reason='UNAVAILABLE_AT_PP', closed_at=? WHERE crate_id=?`).run(nowIso(), c.crate_id);
     db.prepare(`UPDATE pickup_points SET stage='RTO_CLOSED' WHERE pp_id=?`).run(ppId);
   });
   return ppView(ppId);
@@ -342,10 +352,20 @@ export function scanEmptyCrate(ppId, crateId) {
   return ppView(ppId);
 }
 
-export function closeAllEmpty(ppId) {
+export function closeAllEmpty(ppId, opts = {}) {
   const pp = getPP(ppId); if (!pp) notFound('Pickup point not found');
   if (pp.stage !== 'RTO_CLOSED') bad('Empty crates are not open for this PP', 'BAD_STAGE');
-  db.prepare(`UPDATE pickup_points SET stage='EMPTY_CLOSED' WHERE pp_id=?`).run(ppId);
+  // Empty crates never scanned (still available, not stale) → must be intentionally marked unavailable.
+  const pendingCrates = db.prepare(
+    `SELECT crate_id, created_date FROM crates WHERE pp_id=? AND type='EMPTY' AND status='CREATED' ORDER BY crate_id`
+  ).all(ppId).filter((c) => isEligible(c.created_date));
+  if (pendingCrates.length > 0 && !opts.confirmUnavailable)
+    return { needs_confirm: 'unavailable', pending_crates: pendingCrates.map((c) => ({ crate_id: c.crate_id })) };
+  tx(() => {
+    for (const c of pendingCrates)
+      db.prepare(`UPDATE crates SET status='UNAVAILABLE', closed_reason='UNAVAILABLE_AT_PP', closed_at=? WHERE crate_id=?`).run(nowIso(), c.crate_id);
+    db.prepare(`UPDATE pickup_points SET stage='EMPTY_CLOSED' WHERE pp_id=?`).run(ppId);
+  });
   return ppView(ppId);
 }
 

@@ -6,7 +6,7 @@ const STAGE_LABEL = { PENDING: 'Pending', REACHED: 'At PP · RTO', RTO_CLOSED: '
 const CRATE_BADGE = {
   CREATED: ['grey', 'Available'], OPEN: ['amber', 'Filling'], CLOSED: ['green', 'Closed · ready'],
   EMPTY_SCANNED: ['green', 'Scanned'], DISPATCHED: ['blue', 'Dispatched'],
-  RECEIVED_AT_PC: ['blue', 'At PC'], CLEARED: ['grey', 'Cleared'],
+  RECEIVED_AT_PC: ['blue', 'At PC'], CLEARED: ['grey', 'Cleared'], UNAVAILABLE: ['red', 'Unavailable'],
 };
 const SKU_BADGE = { OPEN: ['grey', 'Open'], CLOSED: ['green', 'Done'], SHORT_CLOSED: ['amber', 'Short'] };
 
@@ -53,21 +53,8 @@ export default function RiderFlow() {
   const doAction = guard(async (key) => {
     const ppId = pv.pp.pp_id;
     if (key === 'reach') return setPv(await api.reach(ppId));
-    if (key === 'close_all_rto') {
-      const res = await api.closeRto(ppId);
-      if (res.needs_confirm === 'missing') {
-        return setConfirm({
-          intro: 'These SKUs are pending to be scanned. Would you like to mark them missing at the PP?',
-          items: res.pending_skus.map((s) => `${s.sku_name || s.sku_id} — ${s.missing} of ${s.expected_qty} not scanned`),
-          yesLabel: 'Yes, mark them Missing at PP',
-          noLabel: res.crate_full ? 'Scan other RTO Crate' : 'Go back to SKU Scanning',
-          onYes: guard(async () => { const r2 = await api.closeRto(ppId, { confirmMissing: true }); setConfirm(null); setPv(r2); flash('ok', 'RTO closed — pending SKUs marked missing at PP'); }),
-          onNo: () => { setConfirm(null); if (res.crate_full) doAction('scan_rto_crate'); },
-        });
-      }
-      setPv(res); return flash('ok', 'All RTO crates closed');
-    }
-    if (key === 'close_all_empty') { setPv(await api.closeEmpty(ppId)); return flash('ok', 'All empty crates closed'); }
+    if (key === 'close_all_rto') return runClose('rto');
+    if (key === 'close_all_empty') return runClose('empty');
     if (key === 'leave') { await api.leave(ppId); await refreshPPs(); setView('pps'); return flash('ok', `${pv.pp.pp_code} closed`); }
     if (key === 'scan_ean') { setFx(null); return setView('crate'); }
     if (key === 'scan_rto_crate') {
@@ -85,6 +72,36 @@ export default function RiderFlow() {
       });
     }
   });
+
+  // Close-all with intentional confirmation: nothing is silently dropped. The backend returns
+  // needs_confirm (missing SKUs, then unscanned crates); the rider must confirm marking them
+  // missing / unavailable before the phase closes. Recurses as each confirmation is given.
+  const runClose = async (kind, opts = {}) => {
+    const ppId = pv.pp.pp_id;
+    const res = kind === 'rto' ? await api.closeRto(ppId, opts) : await api.closeEmpty(ppId, opts);
+    if (res.needs_confirm === 'missing') {
+      return setConfirm({
+        intro: 'These SKUs are pending to be scanned. Would you like to mark them missing at the PP?',
+        items: res.pending_skus.map((s) => `${s.sku_name || s.sku_id} — ${s.missing} of ${s.expected_qty} not scanned`),
+        yesLabel: 'Yes, mark them Missing at PP',
+        noLabel: res.crate_full ? 'Scan other RTO Crate' : 'Go back to SKU Scanning',
+        onYes: guard(async () => runClose(kind, { ...opts, confirmMissing: true })),
+        onNo: () => { setConfirm(null); if (res.crate_full) doAction('scan_rto_crate'); },
+      });
+    }
+    if (res.needs_confirm === 'unavailable') {
+      return setConfirm({
+        intro: 'These crates are pending to be scanned. Would you like to mark them unavailable at the PP?',
+        items: res.pending_crates.map((c) => `${c.crate_id}${c.cumulative_rto ? ` — ${c.cumulative_rto} RTO units` : ''}`),
+        yesLabel: 'Yes, mark them Unavailable at PP',
+        noLabel: kind === 'rto' ? 'Go back to Crate Scanning' : 'Go back',
+        onYes: guard(async () => runClose(kind, { ...opts, confirmMissing: true, confirmUnavailable: true })),
+        onNo: () => { setConfirm(null); doAction(kind === 'rto' ? 'scan_rto_crate' : 'scan_empty_crate'); },
+      });
+    }
+    setConfirm(null); setPv(res);
+    flash('ok', kind === 'rto' ? 'RTO crates closed' : 'Empty crates closed');
+  };
 
   // ---------- screens ----------
   if (view === 'login') return (
@@ -146,7 +163,7 @@ export default function RiderFlow() {
     // Show ONE crate type at a time to avoid confusion: RTO crates during the RTO phase, then only
     // empties once all RTO crates are closed. (Empties = EMPTY crates + RTO crates left unpacked.)
     const rtoPhase = pp.stage === 'PENDING' || pp.stage === 'REACHED';
-    const visibleCrates = crates.filter((c) => rtoPhase ? c.type === 'RTO' : (c.type === 'EMPTY' || c.load === 0));
+    const visibleCrates = crates.filter((c) => c.status !== 'UNAVAILABLE' && (rtoPhase ? c.type === 'RTO' : (c.type === 'EMPTY' || c.load === 0)));
     return (
       <>
         <TopBar title={pp.pp_code} sub={`${pp.pp_cluster} · ${STAGE_LABEL[pp.stage] || pp.stage}`} onBack={() => { setView('pps'); refreshPPs(); clearMsg(); }} />

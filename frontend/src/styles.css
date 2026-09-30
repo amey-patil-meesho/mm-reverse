@@ -59,6 +59,7 @@ body { margin: 0; }
 .badge.green { background: var(--ok-bg); color: var(--green); }
 .badge.amber { background: var(--warn-bg); color: var(--amber); }
 .badge.blue { background: #e8eefb; color: #2a4fb7; }
+.badge.red { background: #fde8e6; color: #b3261e; }
 
 .btn { display: block; width: 100%; padding: 14px; border: 0; border-radius: 12px; font-size: 15px; font-weight: 600; cursor: pointer; margin-top: 10px; }
 .btn.primary { background: var(--mm); color: #fff; }

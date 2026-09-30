@@ -69,7 +69,7 @@ api.post('/pps/:ppId/reach', wrap((req) => L.reachPP(Number(req.params.ppId))));
 api.post('/pps/:ppId/scan-rto-crate', wrap((req) => L.scanRtoCrate(Number(req.params.ppId), String(req.body.crateId || '').trim())));
 api.post('/pps/:ppId/close-rto', wrap((req) => L.closeAllRto(Number(req.params.ppId), { confirmMissing: !!req.body?.confirmMissing, confirmUnavailable: !!req.body?.confirmUnavailable })));
 api.post('/pps/:ppId/scan-empty-crate', wrap((req) => L.scanEmptyCrate(Number(req.params.ppId), String(req.body.crateId || '').trim())));
-api.post('/pps/:ppId/close-empty', wrap((req) => L.closeAllEmpty(Number(req.params.ppId))));
+api.post('/pps/:ppId/close-empty', wrap((req) => L.closeAllEmpty(Number(req.params.ppId), { confirmUnavailable: !!req.body?.confirmUnavailable })));
 api.post('/pps/:ppId/leave', wrap((req) => L.leavePP(Number(req.params.ppId))));
 
 // ---- crate scanning / consolidation ----
