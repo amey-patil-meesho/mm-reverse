@@ -32,8 +32,11 @@ export function parseWorkbook(buf) {
   const dirByRoute = new Map();   // route(lower) -> { phone, name }
   const dirByName = new Map();    // name(lower)  -> phone
   const shops = new Map();        // pp_code -> shop name
+  const newEan = new Map();       // sku_id -> ean   from a SKU<>PID<>EAN sheet (no status col) — highest priority
+  const newName = new Map();      // sku_id -> name  from that sheet, if it carries one
   const apprSku = new Map();      // sku_id -> { ean, sku_name } from APPROVED rows
-  const pendSku = new Map();      // sku_id -> { ean, sku_name } from PENDING (non-approved) rows
+  const pendSku = new Map();      // sku_id -> { ean, sku_name } from PENDING rows
+  const rejSku = new Map();       // sku_id -> { sku_name } from REJECTED rows (name only)
   const dataSheets = [];          // { headerMap, rows }
 
   for (const { grid } of sheets) {
@@ -49,18 +52,28 @@ export function parseWorkbook(buf) {
 
     // 1) rider-crate sheet (strongest signal: has a crate column + a PP column)
     if (cCrate >= 0 && cPP >= 0) { dataSheets.push({ H, rows: grid.slice(1) }); continue; }
-    // 2) EAN-SKU master — prefer APPROVED per SKU, keep PENDING as a fallback (resolved later)
+    // 2) A SKU sheet. With a status column it's the EAN SKU Details master (approved/pending/rejected);
+    //    without one it's the SKU<>PID<>EAN mapping tab (the freshest, highest-priority ean source).
     if (cSkuId >= 0 && (cEan >= 0 || cSkuName >= 0)) {
       const cStatus = pick(H, ['status', 'ean status', 'approval status', 'approval']);
-      for (const r of grid.slice(1)) {
-        const id = val(r, cSkuId); if (!id) continue;
-        const ean = val(r, cEan);
-        const name = cSkuName >= 0 ? val(r, cSkuName) : '';
-        const approved = cStatus < 0 || val(r, cStatus).toUpperCase() === 'APPROVED';
-        const map = approved ? apprSku : pendSku;
-        const cur = map.get(id);
-        if (!cur) map.set(id, { ean, sku_name: name });
-        else { if (!cur.ean && ean) cur.ean = ean; if (!cur.sku_name && name) cur.sku_name = name; }
+      if (cStatus < 0) {
+        const cNm = pick(H, ['sku_name', 'item name', 'name']);   // avoid 'product' -> would catch product_id
+        for (const r of grid.slice(1)) {
+          const id = val(r, cSkuId); if (!id) continue;
+          const ean = val(r, cEan); if (ean && !newEan.has(id)) newEan.set(id, ean);
+          const name = cNm >= 0 ? val(r, cNm) : ''; if (name && !newName.has(id)) newName.set(id, name);
+        }
+      } else {
+        for (const r of grid.slice(1)) {
+          const id = val(r, cSkuId); if (!id) continue;
+          const ean = val(r, cEan);
+          const name = cSkuName >= 0 ? val(r, cSkuName) : '';
+          const st = val(r, cStatus).toUpperCase();
+          const map = st === 'APPROVED' ? apprSku : (st === 'REJECTED' ? rejSku : pendSku);
+          const cur = map.get(id);
+          if (!cur) map.set(id, { ean, sku_name: name });
+          else { if (!cur.ean && ean) cur.ean = ean; if (!cur.sku_name && name) cur.sku_name = name; }
+        }
       }
       continue;
     }
@@ -117,13 +130,16 @@ export function parseWorkbook(buf) {
     }
   }
 
-  // One catalog entry per SKU present in the crates: approved ean preferred, else a pending fallback.
+  // One catalog entry per SKU in the crates, by priority:
+  //   ean : SKU<>PID<>EAN -> approved -> pending      name: approved -> pending -> rejected -> SKU<>PID<>EAN
   const needed = new Set(rows.map((r) => String(r.sku_id || '').trim()).filter(Boolean));
   const skus = [];
   for (const id of needed) {
-    const a = apprSku.get(id), p = pendSku.get(id);
-    if (a) skus.push({ sku_id: id, ean: a.ean || (p && p.ean) || '', sku_name: a.sku_name || (p && p.sku_name) || '' });
-    else if (p) skus.push({ sku_id: id, ean: p.ean, sku_name: p.sku_name });
+    const a = apprSku.get(id), p = pendSku.get(id), rj = rejSku.get(id);
+    const ean = newEan.get(id) || (a && a.ean) || (p && p.ean) || '';
+    const sku_name = (a && a.sku_name) || (p && p.sku_name) || (rj && rj.sku_name) || newName.get(id) || '';
+    if (!ean && !sku_name) continue;
+    skus.push({ sku_id: id, ean, sku_name });
   }
 
   const unresolved = rows.filter((r) => !r.rider_phone).length;

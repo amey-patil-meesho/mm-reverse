@@ -15,7 +15,8 @@ var APP_URL = 'https://mm-reverse.onrender.com';          // the live Render app
 var TOKEN   = 'eeBcLyjyNomuc6EfH2WA99sqHc9K-JDO';          // must match BRIDGE_TOKEN on the app
 var MASTER_ID = '1zGfOjfPzVHzyMvx7oObkmyd-UUaEMWXjapIvxGVNyPQ';
 var ADMIN_TAB = 'Admin';
-var SKU_TAB   = 'EAN SKU Details';
+var SKU_PID_TAB = 'SKU <> PID <> EAN';   // freshest sku_id -> ean mapping (highest priority)
+var SKU_TAB   = 'EAN SKU Details';        // approved/pending/rejected fallback source
 var SCAN_TAB_PREFIX = 'Scan Data ';
 // Once-a-day auto-sync times (24h, in the script's timezone). Change these to fit your shift.
 var SYNC_OUT_HOUR = 5;    // ~5 AM: fresh-load the day's pending crates BEFORE the 6 AM shift
@@ -181,37 +182,58 @@ function readAdmin(master) {
   }
   return out;
 }
-// Per SKU: prefer an APPROVED ean; if a SKU has no approved ean, fall back to a PENDING one so it
-// still shows a name + EAN in the app (the EAN<>SKU sheet is a snapshot and approvals lag behind
-// live SKUs). One entry per sku_id. `needed` (optional) limits output to the SKUs in today's crates.
+// Build the sku_id -> {ean, sku_name} catalog by priority. EAN is what lets the rider SCAN (and
+// search+mark) an item; the name is the fallback so they can still identify a product with no EAN.
+//   EAN : SKU<>PID<>EAN tab  ->  EAN SKU Details APPROVED  ->  PENDING   (rejected EANs are ignored)
+//   name: APPROVED  ->  PENDING  ->  REJECTED  ->  SKU<>PID<>EAN tab
+// One entry per sku_id. `needed` (optional) limits output to the SKUs in today's crates.
 function buildSkuList(master, needed) {
-  var sh = findSheetByCols(master, SKU_TAB, [['sku_id', 'sku id', 'sku'], ['ean', 'barcode', 'sku_name', 'name', 'item name', 'product']]);
-  if (!sh) return [];
-  var v = sh.getDataRange().getValues(); var h = cols(v[0]);
-  var cId = pick(h, ['sku_id', 'sku id', 'sku']);
-  var cEan = pick(h, ['ean', 'barcode', 'ean code']);
-  var cName = pick(h, ['sku_name', 'name', 'item name', 'product', 'description']);
-  var cStatus = pick(h, ['status', 'ean status', 'approval status', 'approval']);
-  var appr = {}, pend = {};
-  for (var i = 1; i < v.length && cId >= 0; i++) {
-    var id = String(v[i][cId] || '').trim(); if (!id) continue;
-    if (needed && !needed[id]) continue;
-    var ean = cEan >= 0 ? String(v[i][cEan] || '').trim() : '';
-    var name = cName >= 0 ? String(v[i][cName] || '').trim() : '';
-    var st = cStatus >= 0 ? String(v[i][cStatus] || '').trim().toUpperCase() : 'APPROVED';
-    var bucket = (st === 'APPROVED') ? appr : pend;
-    // keep the first row for this sku, but upgrade to one that actually has an ean if the first didn't
-    if (!bucket[id]) bucket[id] = { sku_id: id, ean: ean, sku_name: name };
-    else { if (!bucket[id].ean && ean) bucket[id].ean = ean; if (!bucket[id].sku_name && name) bucket[id].sku_name = name; }
+  // Source 1 — SKU <> PID <> EAN: the freshest sku_id -> ean mapping (highest priority for scanning).
+  var newEan = {}, newName = {};
+  var sh1 = findSheetByCols(master, SKU_PID_TAB, [['sku_id', 'sku id', 'sku'], ['ean', 'barcode']]);
+  if (sh1) {
+    var v1 = sh1.getDataRange().getValues(); var h1 = cols(v1[0]);
+    var i1 = pick(h1, ['sku_id', 'sku id', 'sku']);
+    var e1 = pick(h1, ['ean', 'barcode', 'ean code']);
+    var n1 = pick(h1, ['sku_name', 'name', 'item name']);   // this tab usually has no name; take one only if present
+    for (var r1 = 1; r1 < v1.length && i1 >= 0; r1++) {
+      var id1 = String(v1[r1][i1] || '').trim(); if (!id1) continue;
+      if (needed && !needed[id1]) continue;
+      if (e1 >= 0 && !newEan[id1]) { var ev = String(v1[r1][e1] || '').trim(); if (ev) newEan[id1] = ev; }
+      if (n1 >= 0 && !newName[id1]) { var nv = String(v1[r1][n1] || '').trim(); if (nv) newName[id1] = nv; }
+    }
   }
+  // Source 2 — EAN SKU Details: approved / pending / rejected buckets ({ean, sku_name}).
+  var appr = {}, pend = {}, rej = {};
+  var sh2 = findSheetByCols(master, SKU_TAB, [['sku_id', 'sku id', 'sku'], ['ean', 'barcode', 'sku_name', 'name', 'item name', 'product']]);
+  if (sh2) {
+    var v = sh2.getDataRange().getValues(); var h = cols(v[0]);
+    var cId = pick(h, ['sku_id', 'sku id', 'sku']);
+    var cEan = pick(h, ['ean', 'barcode', 'ean code']);
+    var cName = pick(h, ['sku_name', 'name', 'item name', 'product', 'description']);
+    var cStatus = pick(h, ['status', 'ean status', 'approval status', 'approval']);
+    for (var i = 1; i < v.length && cId >= 0; i++) {
+      var id = String(v[i][cId] || '').trim(); if (!id) continue;
+      if (needed && !needed[id]) continue;
+      var ean = cEan >= 0 ? String(v[i][cEan] || '').trim() : '';
+      var name = cName >= 0 ? String(v[i][cName] || '').trim() : '';
+      var st = cStatus >= 0 ? String(v[i][cStatus] || '').trim().toUpperCase() : 'APPROVED';
+      var bucket = (st === 'APPROVED') ? appr : (st === 'REJECTED' ? rej : pend);
+      if (!bucket[id]) bucket[id] = { ean: ean, sku_name: name };
+      else { if (!bucket[id].ean && ean) bucket[id].ean = ean; if (!bucket[id].sku_name && name) bucket[id].sku_name = name; }
+    }
+  }
+  // Combine per sku_id by the priority chain above.
+  var ids = {}, k;
+  for (k in newEan) ids[k] = 1; for (k in newName) ids[k] = 1;
+  for (k in appr) ids[k] = 1; for (k in pend) ids[k] = 1; for (k in rej) ids[k] = 1;
   var out = [];
-  for (var a in appr) {
-    var e = appr[a];
-    // approved row exists but has no ean -> borrow the ean (and any missing name) from a pending row
-    if (!e.ean && pend[a] && pend[a].ean) e = { sku_id: a, ean: pend[a].ean, sku_name: e.sku_name || pend[a].sku_name };
-    out.push(e);
+  for (var id2 in ids) {
+    var eanOut = newEan[id2] || (appr[id2] && appr[id2].ean) || (pend[id2] && pend[id2].ean) || '';
+    var nameOut = (appr[id2] && appr[id2].sku_name) || (pend[id2] && pend[id2].sku_name) || (rej[id2] && rej[id2].sku_name) || newName[id2] || '';
+    if (!eanOut && !nameOut) continue;
+    out.push({ sku_id: id2, ean: eanOut, sku_name: nameOut });
   }
-  for (var p in pend) if (!appr[p]) out.push(pend[p]);   // pending fallback: only SKUs with no approved row at all
   return out;
 }
 function buildPpShopMap(master) {
